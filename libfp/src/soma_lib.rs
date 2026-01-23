@@ -1,18 +1,20 @@
-//
-// Shared (host / target) library module for Soma sequencer app
-// 
-// This is a port of the DistingNT Soma Stochastic Exotic Scale Sequencer written by @thorinside
-// See: https://github.com/thorinside/soma/blob/main/soma.lua
-//
-// Ported by Richard Smith https://github.com/rjsmith
-//
-// Code in this library module can be unit tested on a host computer but deployed onto a Faderpunk runtime target.
+//!
+//! Shared (host / target) library module for Soma sequencer app
+//! 
+//! This is a port of the DistingNT Soma Stochastic Exotic Scale Sequencer written by @thorinside
+//! See: https://github.com/thorinside/soma/blob/main/soma.lua
+//!
+//! Ported by Richard Smith https://github.com/rjsmith
+//!
+//! Code in this library module can be unit tested on a host computer but deployed onto a Faderpunk runtime target.
 
 use core::{panic};
+use serde::{Deserialize, Serialize};
+
 use crate::{Key, Note};
 
 // Maximum sequencer length in # notes
-pub const MAX_SEQUENCE_LENGTH: usize = 128;
+pub const MAX_SEQUENCE_LENGTH: usize = 64;
 const MAX_2_POW_12:u16 = 4095;
 const HALF_MAX_2_POW_12:u16 = MAX_2_POW_12 / 2;
 
@@ -20,10 +22,13 @@ const HALF_MAX_2_POW_12:u16 = MAX_2_POW_12 / 2;
 ///
 /// Soma generates patterns that mutate based on probability controls - like a Turing Machine.
 /// The twist is it weights "spicy" notes higher - the ones that make each scale sound different from major (Ionian).
+#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
 pub struct SomaGenerator {
     // List of scale Notes in the generated Soma sequence, up to MAX_SEQUENCE_LENGTH in length.
+    #[serde(with = "serde_arrays")] // using because sequence length > 32
     note_pattern: [Note; MAX_SEQUENCE_LENGTH],
     // Gate states (true/false) for each pattern step
+    #[serde(with = "serde_arrays")] // using because sequence length > 32
     gate_pattern: [bool; MAX_SEQUENCE_LENGTH],
     // Computed fractional probabilities of each note in a scale, sum to MAX_2_POW_12 (2^12-1)
     scale_probabilities: [u16; 12], 
