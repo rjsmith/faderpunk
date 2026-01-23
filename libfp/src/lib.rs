@@ -17,6 +17,7 @@ pub mod latch;
 pub mod quantizer;
 pub mod types;
 pub mod utils;
+pub mod soma_lib;
 
 use constants::{
     CURVE_EXP, CURVE_LOG, WAVEFORM_SAW, WAVEFORM_SAW_INV, WAVEFORM_SINE, WAVEFORM_SQUARE,
@@ -247,7 +248,7 @@ impl FromValue for Note {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize, PostcardBindings)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, PostcardBindings)]
 #[repr(u8)]
 pub enum Key {
     #[default]
