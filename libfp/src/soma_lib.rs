@@ -61,7 +61,8 @@ impl SomaGenerator {
     /// 
     /// ## Arguments
     /// * `scale` - the scale to compute probabilities for, comparing against the major scale.
-    ///             Also changes the internal current scale to this scale
+    /// 
+    /// NB: Also changes the internal current scale to this scale
     pub fn compute_scale_probabilities(&mut self, scale: Key) {
         self.current_scale = scale;
 
@@ -168,8 +169,8 @@ impl SomaGenerator {
     /// Returns a Note picked from the current scale based on pre-computed weighted probabilities
     /// 
     /// ## Arguments
-    /// * `random_probability` - random number 0 to MAX_2_POW_12 used to pick new note based on scale probabilities
-    ///                          (e.g. from a random number generator)
+    /// * `random_probability` - random number 0 to MAX_2_POW_12 used to pick new note based on scale probabilities (e.g. from a random number generator)
+    /// 
     /// ## Returns              
     ///* Note picked from the current scale
     ///
