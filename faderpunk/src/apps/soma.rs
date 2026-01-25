@@ -37,12 +37,12 @@
 //! | Control | Function | + Shift | + Fn
 //! |---------|----------|---------|------|
 //! | Jack 1  | V/o Pitch CV out | N/A     | N/A  |
-//! | Fader 1 | Note mutation % (0=locked, 100=chaos) | Octave spread % (0=none, 100=3 octaves) | Speed (clock divide) |
+//! | Fader 1 | Note mutation % (0=locked, full=chaos) | Octave spread % (0=none, full=3 octaves) | N/A|
 //! | LED 1 Top | V/o output level | Octave change chance in red | N/A
 //! | LED 1 Bottom | Flash at tempo | N/A | N/A
 //! | Fn 1    | Mute both outputs | Press button x times sets length (max 64 steps) | N/A |
 //! | Jack 2  | Gate output | N/A     | N/A  |
-//! | Fader 2 | Gate mutation % (0=locked, 100=chaos) | N/A | N/A |
+//! | Fader 2 | Gate mutation % (0=locked, full=chaos) | Speed (clock divide)  | N/A |
 //! | LED 2 Top | Gate output indicator | N/A | N/A 
 //! | LED 2 Bottom | N/A | N/A | N/A
 //! | Fn 2    | N/A | N/A | N/A |
@@ -114,9 +114,8 @@ use defmt::info;
 pub const CHANNELS: usize = 2;
 pub const PARAMS: usize = 8;
 
-// Clock division resolution, 12 = quarter notes at 24 PPQN
-const CLOCK_RESOLUTION: [i32; 8] = [24, 16, 12, 8, 6, 4, 3, 2];
-const DEFAULT_CLOCK_DIVIDER: u16 = 12; // Quarter notes
+// Clock division resolution, 24 = quarter notes at 24 PPQN
+const CLOCK_RESOLUTION: [u16; 8] = [24 /* quarter note */, 16 /* dotted eighth */, 12 /* eighth */, 8, 6 /* sixteenth note */, 4, 3, 2];
 
 // Maximum octave range for randomization
 const MAX_OCTAVE_RANGE: f32 = 3.;
@@ -219,7 +218,8 @@ impl AppParams for Params {
 pub struct Storage {
     note_flip_prob_saved: u16,
     gate_flip_prob_saved: u16,
-    octave_prob_saved: u16,
+    octave_spread_prob_saved: u16,
+    clock_resolution_saved: u16,
     length_saved: u16,
 }
 
@@ -228,7 +228,8 @@ impl Default for Storage {
         Self {
             note_flip_prob_saved: 0,
             gate_flip_prob_saved: 0,
-            octave_prob_saved: 0,
+            octave_spread_prob_saved: 0,
+            clock_resolution_saved: 2048,
             length_saved: 8,
         }
     }
@@ -264,8 +265,6 @@ pub async fn run(app: &App<CHANNELS>,
     params: &ParamStore<Params>,
     storage: &ManagedStorage<Storage>,
 ) {
-
-
     info!("Soma started!");
     
     // Get app parameters
@@ -289,9 +288,8 @@ pub async fn run(app: &App<CHANNELS>,
     let mut clock = app.use_clock();
     let die = app.use_die();
     let midi = app.use_midi_output(midi_out, midi_chan);
-    let octave_spread_range_glob = app.make_global(0);
     let recall_flag = app.make_global(false); // What is this for?
-    let div_glob = app.make_global(DEFAULT_CLOCK_DIVIDER);
+    let div_glob = app.make_global(CLOCK_RESOLUTION[0]);
     let midi_note = app.make_global(MidiNote::default());
     let glob_latch_layer = app.make_global(LatchLayer::Main);
     let length_glob = app.make_global(8);
@@ -303,11 +301,12 @@ pub async fn run(app: &App<CHANNELS>,
     let pitch_output = app.make_out_jack(0, range).await;
     let gate_output = app.make_gate_jack(1, 4095).await;
 
-    //  let (octave_prob, length) =
-    //     storage.query(|s| (s.octave_saved, s.length_saved));
+    let (clock_res, mut length) =
+        storage.query(|s| (s.clock_resolution_saved, s.length_saved));
+
+    div_glob.set(CLOCK_RESOLUTION[clock_res as usize / 512]);
 
     let length =8;
-    // octave_prob_glob.set(octave_prob);
     // length_glob.set(length);
 
     // Set up Soma Generator
@@ -357,11 +356,12 @@ pub async fn run(app: &App<CHANNELS>,
 
                         // Apply octave variation (add between 0 and 3 octaves)
                         // `octave_spread range` is 2^12 = 4095 max, so spread of octave 0 (0) - 4095 (+3 octaves)
-                        let octave_spread_range  = ((octave_spread_range_glob.get() / 4095) as f32 * MAX_OCTAVE_RANGE) as u16;
+                        let octave_spread_range  = (((storage.query(|s| s.octave_spread_prob_saved) as f32 / 4095.0) as f32 * MAX_OCTAVE_RANGE) as u16);
                         let mut octave_offset = 0;
                         if octave_spread_range > 0 {
-                            let octave_chance = die.roll();
-                            octave_offset = ((octave_chance / 4095) as f32 * octave_spread_range as f32) as i8;
+                            let octave_chance = die.roll(); // 0 - 4095 random number
+                            // NB: The "+ 0.5" here is to ensure proper rounding when converting to i8
+                            octave_offset = ((((octave_chance as f32 / 4095.0) * octave_spread_range as f32) + 0.5) as i8).clamp(0, MAX_OCTAVE_RANGE as i8);
                         }
 
                         // Calculate output pitch
@@ -439,11 +439,10 @@ pub async fn run(app: &App<CHANNELS>,
         loop {
             let chan = faders.wait_for_any_change().await;
             let latch_layer = glob_latch_layer.get();
-            info!("Fader {} changed on latch layer {} to value {}", chan, latch_layer as u8, faders.get_value_at(chan));
             if chan == 0 {
                 let target_value = match latch_layer {
                     LatchLayer::Main => storage.query(|s| s.note_flip_prob_saved),
-                    LatchLayer::Alt => 0,
+                    LatchLayer::Alt => storage.query(|s| s.octave_spread_prob_saved),
                     LatchLayer::Third => 0,
                 };
                 if let Some(new_value) =
@@ -454,6 +453,11 @@ pub async fn run(app: &App<CHANNELS>,
                             // Note change probability changed
                             storage.modify_and_save(|s| { s.note_flip_prob_saved = new_value});   
                         }
+                        LatchLayer::Alt => {
+                            // Octave spread probability changed
+                            info!("Octave spread prob changed to {}", new_value);
+                            storage.modify_and_save(|s| { s.octave_spread_prob_saved = new_value});   
+                        }   
                         _ => {}
                     }
                 }       
@@ -462,7 +466,7 @@ pub async fn run(app: &App<CHANNELS>,
                 // Channel 2 fader changes
                let target_value = match latch_layer {
                     LatchLayer::Main => storage.query(|s| s.gate_flip_prob_saved),
-                    LatchLayer::Alt => 0,
+                    LatchLayer::Alt => storage.query(|s| s.clock_resolution_saved),
                     LatchLayer::Third => 0,
                 };
                 if let Some(new_value) =
@@ -472,6 +476,16 @@ pub async fn run(app: &App<CHANNELS>,
                         LatchLayer::Main => {
                             // Gate change probability changed
                             storage.modify_and_save(|s| { s.gate_flip_prob_saved = new_value});   
+                        }
+                        LatchLayer::Alt => {
+                            // The higher the clock resolution fader, the faster the sequencer will step though the pattern
+                            div_glob.set(CLOCK_RESOLUTION[new_value as usize / 512]);
+                            storage.modify_and_save(|s| s.clock_resolution_saved = new_value);
+                            // We are changing clock division here, so switch off midi note
+                            if midi_mode == MidiMode::Note {
+                                let note = midi_note.get();
+                                midi.send_note_off(note).await;
+                            }
                         }
                         _ => {}
                     }
@@ -501,6 +515,8 @@ pub async fn run(app: &App<CHANNELS>,
 
         loop {
             app.delay_millis(1).await;
+
+            glob_latch_layer.set(LatchLayer::from(buttons.is_shift_pressed()));
 
             // Handle pattern length recording - start and stop recording
             if buttons.is_shift_pressed() && !shift_old {
@@ -534,6 +550,7 @@ pub async fn run(app: &App<CHANNELS>,
             }
         }
     };
+
     join5(clock_loop, faders_loop, fut3, fut4, scene_handler).await;
 
 }
