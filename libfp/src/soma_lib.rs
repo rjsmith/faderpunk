@@ -54,6 +54,11 @@ impl SomaGenerator {
         self.current_step
     }
 
+    /// Moves next sequence step back to the start of the pattern
+    pub fn reset_current_step(&mut self) {
+            self.current_step = 0;
+    }
+
     /// Returns the current scale
     pub fn get_current_scale(&self) -> Key {
         self.current_scale
@@ -94,7 +99,7 @@ impl SomaGenerator {
             total_weight += self.scale_weights[n];
         }
 
-        // Update fractional probabilities array with new weights
+        // Update probabilities array with new weights
         for n in 0..12 {
             self.scale_probabilities[n] = self.rescale_fractional_probability_to_0_4095(self.scale_weights[n] as f32 / total_weight as f32);
         }
@@ -139,8 +144,8 @@ impl SomaGenerator {
      * ## Arguments
      * * `length` - length of the pattern to generate, in #notes
      * * `scale` - scale to use for the pattern
-     * * `note_probability` - array of random floats 0.0 to 1.0 used to pick new notes for each step
-     * * `gate_probability` - array of random floats 0.0 to 1.0 used to pick new gates for each step
+     * * `note_probability` - array of random integers 0 to 4095 used to pick new notes for each step
+     * * `gate_probability` - array of random integers 0 to 4095 used to pick new gates for each step
      */
     pub fn initialize_patterns(&mut self, length: usize, scale: Key, note_probability: [u16; MAX_SEQUENCE_LENGTH], gate_probability: [u16; MAX_SEQUENCE_LENGTH]) {
         self.current_scale = scale;

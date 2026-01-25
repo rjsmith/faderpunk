@@ -9,7 +9,7 @@
 //! Ported by Richard Smith https://github.com/rjsmith
 //! 
 //! # Description
-//! A stochastic sequencer for the disting NT that does the Turing Machine thing with exotic scales.
+//! A stochastic sequencer app for the ATOV Faderpunk that does the Turing Machine thing with exotic scales.
 //!
 //! Named after the mysterious drink from "Brave New World" - creates patterns that feel both random and intentional, somewhere between chaos and order.
 //! 
@@ -93,25 +93,33 @@
 //! The weighted probability thing ensures each scale sounds like itself. The Turing Machine behavior creates organic evolution. It's that balance between random and intentional that makes it musical.
 //!
 use embassy_futures::{
-    select::{select, select3},
+    join::join5, select::{select, select3}
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use heapless::Vec;
 use libfp::{
     ext::FromValue, 
-    soma_lib::SomaGenerator,
+    soma_lib::MAX_SEQUENCE_LENGTH, soma_lib::SomaGenerator,
+    quantizer::Pitch,
     latch::LatchLayer, AppIcon, Brightness, ClockDivision, Color, Config, Curve,
     MidiCc, MidiChannel, MidiMode, MidiNote, MidiOut, Param, Range, Value, APP_MAX_PARAMS,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore, SceneEvent};
+use crate::app::{App, AppParams, AppStorage, ClockEvent, Led, ManagedStorage, ParamStore, SceneEvent};
 
 // TODO: Remove from final code
 use defmt::info;
 
 pub const CHANNELS: usize = 2;
 pub const PARAMS: usize = 8;
+
+// Clock division resolution, 12 = quarter notes at 24 PPQN
+const CLOCK_RESOLUTION: [i32; 8] = [24, 16, 12, 8, 6, 4, 3, 2];
+const DEFAULT_CLOCK_DIVIDER: u16 = 12; // Quarter notes
+
+// Maximum octave range for randomization
+const MAX_OCTAVE_RANGE: f32 = 3.;
 
 // App configuration visible to the configurator
 pub static CONFIG: Config<PARAMS> = Config::new(
@@ -209,17 +217,19 @@ impl AppParams for Params {
 // Set up app scene storage - persistent data
 #[derive(Serialize, Deserialize)]
 pub struct Storage {
-    octave_saved: u16,
+    note_flip_prob_saved: u16,
+    gate_flip_prob_saved: u16,
+    octave_prob_saved: u16,
     length_saved: u16,
-    // soma_saved: SomaGenerator
 }
 
 impl Default for Storage {
     fn default() -> Self {
         Self {
-            octave_saved: 0,
+            note_flip_prob_saved: 0,
+            gate_flip_prob_saved: 0,
+            octave_prob_saved: 0,
             length_saved: 8,
-            // soma_saved: SomaGenerator::default()
         }
     }
 }
@@ -274,45 +284,256 @@ pub async fn run(app: &App<CHANNELS>,
     });
 
     let buttons = app.use_buttons();
-    let fader = app.use_faders();
+    let faders = app.use_faders();
     let leds = app.use_leds();
     let mut clock = app.use_clock();
     let die = app.use_die();
-    let soma_glob = app.make_global(SomaGenerator::default());
     let midi = app.use_midi_output(midi_out, midi_chan);
-    let note_prob_glob = app.make_global(0);
-    let gate_prob_glob = app.make_global(0);
-    let octave_prob_glob = app.make_global(0);
+    let octave_spread_range_glob = app.make_global(0);
     let recall_flag = app.make_global(false); // What is this for?
-    let div_glob = app.make_global(4);
+    let div_glob = app.make_global(DEFAULT_CLOCK_DIVIDER);
     let midi_note = app.make_global(MidiNote::default());
     let glob_latch_layer = app.make_global(LatchLayer::Main);
     let length_glob = app.make_global(8);
-    let clock_resolution = [24, 16, 12, 8, 6, 4, 3, 2];
 
+    // Switch off LEDs on both channels initially
     leds.set(0, Led::Button, led_color, Brightness::Off);
     leds.set(1, Led::Button, led_color, Brightness::Off);
 
     let pitch_output = app.make_out_jack(0, range).await;
-    let gate_output = app.make_out_jack(1, Range::_0_10V).await;
+    let gate_output = app.make_gate_jack(1, 4095).await;
 
-     let (octave_prob, length, /* mut soma */) =
-        storage.query(|s| (s.octave_saved, s.length_saved, /* s.soma_saved */));
+    //  let (octave_prob, length) =
+    //     storage.query(|s| (s.octave_saved, s.length_saved));
 
-    octave_prob_glob.set(octave_prob);
-    length_glob.set(length);
-    // soma_glob.set(soma);
+    let length =8;
+    // octave_prob_glob.set(octave_prob);
+    // length_glob.set(length);
 
+    // Set up Soma Generator
+    let mut soma = SomaGenerator::default();
+    let mut note_probabilities = [0; libfp::soma_lib::MAX_SEQUENCE_LENGTH];
+    let mut gate_probabilities = [0; libfp::soma_lib::MAX_SEQUENCE_LENGTH];
+    for n in 0..length {
+        note_probabilities[n] = die.roll();
+        gate_probabilities[n] = die.roll();
+    } 
+    soma.initialize_patterns(8, libfp::Key::Phrygian, note_probabilities, gate_probabilities);
 
-    let main_loop = async {
-        buttons.wait_for_down(0).await;
-        let value = fader.get_value_at(0);
-        // TODO: Remove info! from final co
-        info!("value {}", value);
-        pitch_output.set_value(value);
-        leds.set(0, Led::Top, led_color, Brightness::Custom((value / 16) as u8));
+    // Main sequencer task, clocked by internal clock
+    let clock_loop = async {
+        // Clock step counter
+        let mut clkn = 0;
+        loop {
+            let div = div_glob.get();
+            let length = length_glob.get();
+
+            match clock.wait_for_event(ClockDivision::_1).await {
+                ClockEvent::Reset => {
+                    clkn = 0;
+                    if midi_mode == MidiMode::Note {
+                        midi.send_note_off(midi_note.get()).await;
+                    }
+                    soma.reset_current_step();
+                }
+
+                ClockEvent::Tick => {
+                   
+                    // If on the right division, step the note and gate sequencers
+                    if clkn % div == 0 {
+
+                        let note_change_prob = storage.query(|s| s.note_flip_prob_saved);
+                        let gate_change_prob = storage.query(|s| s.gate_flip_prob_saved); 
+
+                        let flip_note = die.roll() < note_change_prob;
+                        let flip_gate = die.roll() < gate_change_prob;
+                        let note_choice_probability = die.roll().clamp(0, 4095);
+                        // Step the soma generator
+                        let (note, gate) = soma.generate_next_step(
+                            flip_gate,
+                            flip_note,
+                            note_choice_probability,
+                        );
+
+                        // Apply octave variation (add between 0 and 3 octaves)
+                        // `octave_spread range` is 2^12 = 4095 max, so spread of octave 0 (0) - 4095 (+3 octaves)
+                        let octave_spread_range  = ((octave_spread_range_glob.get() / 4095) as f32 * MAX_OCTAVE_RANGE) as u16;
+                        let mut octave_offset = 0;
+                        if octave_spread_range > 0 {
+                            let octave_chance = die.roll();
+                            octave_offset = ((octave_chance / 4095) as f32 * octave_spread_range as f32) as i8;
+                        }
+
+                        // Calculate output pitch
+                        let out_pitch = Pitch {
+                            octave: octave_offset,
+                            note: note.into(),
+                        };
+
+                        // Set output CV, gate and MIDI Note/CC
+                        let out_pitch_in_0_10v = out_pitch.as_counts(Range::_0_10V);
+                        pitch_output.set_value(out_pitch_in_0_10v);
+                        leds.set(
+                            0,
+                            Led::Top,
+                            led_color,
+                            Brightness::Custom((out_pitch_in_0_10v / 160) as u8), // TODO: Verify scaling
+                        );
+
+                        match midi_mode {
+                            MidiMode::Note => {
+                                let note = midi_note.set(out_pitch.as_midi() + base_note);
+                                midi.send_note_on(note, 4095).await;
+                            }
+                            MidiMode::Cc => {
+                                midi.send_cc(midi_cc, out_pitch.as_counts(Range::_0_10V)).await;
+                            }
+                        }
+
+                        // Output gate CV and set LED
+                        if gate {
+                            gate_output.set_high().await;
+                            leds.set(1, Led::Top, led_color, Brightness::High);
+                        } else {
+                            gate_output.set_low().await; 
+                            // This shoul dbe redundant becauise of the gate length time handling code below
+                            leds.unset(1, Led::Top);
+                        }
+
+                        info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
+
+                   }
+
+                   // Wait for the gate time to elapse, then terminate the playing note, if any
+                   if clkn % div == (div * gatel as u16 / 100).clamp(1, div - 1) {
+                        // Gate  off
+                        leds.unset(1, Led::Top);
+                        gate_output.set_low().await;
+
+                        if midi_mode == MidiMode::Note {
+                            midi.send_note_off(midi_note.get()).await;
+                        }
+
+                    }
+                   
+                    clkn += 1;
+                }
+                ClockEvent::Stop => {
+                    info!("Clock stopped");
+                    if midi_mode == MidiMode::Note {
+                        midi.send_note_off(midi_note.get()).await;
+                    }
+                }
+                // Ignore other MIDI Clock events
+                _ => {}
+            }
+        }
     };
 
-    main_loop.await;
+    let faders_loop = async {
+        let mut latch = [
+            app.make_latch(faders.get_value_at(0)),
+            app.make_latch(faders.get_value_at(1)),
+        ];
+
+        loop {
+            let chan = faders.wait_for_any_change().await;
+            let latch_layer = glob_latch_layer.get();
+            info!("Fader {} changed on latch layer {} to value {}", chan, latch_layer as u8, faders.get_value_at(chan));
+            if chan == 0 {
+                let target_value = match latch_layer {
+                    LatchLayer::Main => storage.query(|s| s.note_flip_prob_saved),
+                    LatchLayer::Alt => 0,
+                    LatchLayer::Third => 0,
+                };
+                if let Some(new_value) =
+                    latch[chan].update(faders.get_value_at(chan), latch_layer, target_value)
+                {
+                    match latch_layer {
+                        LatchLayer::Main => {
+                            // Note change probability changed
+                            storage.modify_and_save(|s| { s.note_flip_prob_saved = new_value});   
+                        }
+                        _ => {}
+                    }
+                }       
+                
+            } else if chan == 1 {
+                // Channel 2 fader changes
+               let target_value = match latch_layer {
+                    LatchLayer::Main => storage.query(|s| s.gate_flip_prob_saved),
+                    LatchLayer::Alt => 0,
+                    LatchLayer::Third => 0,
+                };
+                if let Some(new_value) =
+                    latch[chan].update(faders.get_value_at(chan), latch_layer, target_value)
+                {
+                    match latch_layer {
+                        LatchLayer::Main => {
+                            // Gate change probability changed
+                            storage.modify_and_save(|s| { s.gate_flip_prob_saved = new_value});   
+                        }
+                        _ => {}
+                    }
+                }                      
+            }
+        }
+    };
+
+    // Set up pattern length recording
+    let length_rec_flag = app.make_global(false);
+    let length_rec = app.make_global(0);
+
+    let fut3 = async {
+        loop {
+            // Increment temporary recorded pattern length whilst shift button held down
+            let shift = buttons.wait_for_down(0).await;
+            let mut length = length_rec.get();
+            if shift && length_rec_flag.get() {
+                length += 1;
+                length_rec.set(length.min(libfp::soma_lib::MAX_SEQUENCE_LENGTH as u16));
+            }
+        }
+    };
+
+    let fut4 = async {
+        let mut shift_old = false;
+
+        loop {
+            app.delay_millis(1).await;
+
+            // Handle pattern length recording - start and stop recording
+            if buttons.is_shift_pressed() && !shift_old {
+                shift_old = true;
+                length_rec_flag.set(true);
+                length_rec.set(0);
+            }
+            if !buttons.is_shift_pressed() && shift_old {
+                shift_old = false;
+                length_rec_flag.set(false);
+                let length = length_rec.get();
+                if length > 1 {
+                    length_glob.set(length);
+                    storage.modify_and_save(|s| s.length_saved = length);
+                }
+            }
+        }
+    };
+
+    let scene_handler = async {
+        loop {
+            match app.wait_for_scene_event().await {
+                SceneEvent::LoadSscene(scene) => {
+                    storage.load_from_scene(scene).await;
+                    // TODO: Work out what to do - e.g. update xxx_glob variables
+                }
+
+                SceneEvent::SaveScene(scene) => {
+                    storage.save_to_scene(scene).await;
+                }
+            }
+        }
+    };
+    join5(clock_loop, faders_loop, fut3, fut4, scene_handler).await;
 
 }
