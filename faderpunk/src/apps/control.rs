@@ -7,7 +7,7 @@ use heapless::Vec;
 use libfp::{
     ext::FromValue,
     latch::LatchLayer,
-    utils::{attenuate_bipolar, clickless, split_unsigned_value},
+    utils::{attenuate, attenuate_bipolar, clickless, split_unsigned_value},
     AppIcon, Brightness, Color, MidiCc, MidiChannel, MidiOut, APP_MAX_PARAMS,
 };
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use libfp::{Config, Curve, Param, Range, Value};
 use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore, SceneEvent};
 
 pub const CHANNELS: usize = 1;
-pub const PARAMS: usize = 9;
+pub const PARAMS: usize = 12;
 
 pub static CONFIG: Config<PARAMS> = Config::new(
     "Control",
@@ -57,6 +57,14 @@ pub static CONFIG: Config<PARAMS> = Config::new(
 .add_param(Param::bool {
     name: "Store state",
 })
+.add_param(Param::Enum {
+    name: "Button mode",
+    variants: &["Mute", "CC toggle", "CC momentary"],
+})
+.add_param(Param::MidiChannel {
+    name: "Button Channel",
+})
+.add_param(Param::MidiCc { name: "Button CC" })
 .add_param(Param::MidiOut);
 
 pub struct Params {
@@ -69,6 +77,9 @@ pub struct Params {
     invert: bool,
     color: Color,
     save_state: bool,
+    button_mode: usize,
+    button_ch: MidiChannel,
+    button_cc: MidiCc,
 }
 
 impl Default for Params {
@@ -83,6 +94,9 @@ impl Default for Params {
             invert: false,
             color: Color::Violet,
             save_state: true,
+            button_mode: 0,
+            button_ch: MidiChannel::default(),
+            button_cc: MidiCc::from(33),
         }
     }
 }
@@ -101,7 +115,10 @@ impl AppParams for Params {
             invert: bool::from_value(values[5]),
             color: Color::from_value(values[6]),
             save_state: bool::from_value(values[7]),
-            midi_out: MidiOut::from_value(values[8]),
+            button_mode: usize::from_value(values[8]),
+            button_ch: MidiChannel::from_value(values[9]),
+            button_cc: MidiCc::from_value(values[10]),
+            midi_out: MidiOut::from_value(values[11]),
         })
     }
 
@@ -115,6 +132,9 @@ impl AppParams for Params {
         vec.push(self.invert.into()).unwrap();
         vec.push(self.color.into()).unwrap();
         vec.push(self.save_state.into()).unwrap();
+        vec.push(self.button_mode.into()).unwrap();
+        vec.push(self.button_ch.into()).unwrap();
+        vec.push(self.button_cc.into()).unwrap();
         vec.push(self.midi_out.into()).unwrap();
         vec
     }
@@ -167,25 +187,41 @@ pub async fn run(
     params: &ParamStore<Params>,
     storage: &ManagedStorage<Storage>,
 ) {
-    let (curve, midi_chan, midi_cc, midi_out, on_release, range, inverted, led_color, save_state) =
-        params.query(|p| {
-            (
-                p.curve,
-                p.midi_channel,
-                p.midi_cc,
-                p.midi_out,
-                p.on_release,
-                p.range,
-                p.invert,
-                p.color,
-                p.save_state,
-            )
-        });
+    let (
+        curve,
+        midi_chan,
+        midi_cc,
+        midi_out,
+        on_release,
+        range,
+        inverted,
+        led_color,
+        save_state,
+        button_mode,
+        button_ch,
+        button_cc,
+    ) = params.query(|p| {
+        (
+            p.curve,
+            p.midi_channel,
+            p.midi_cc,
+            p.midi_out,
+            p.on_release,
+            p.range,
+            p.invert,
+            p.color,
+            p.save_state,
+            p.button_mode,
+            p.button_ch,
+            p.button_cc,
+        )
+    });
 
     let buttons = app.use_buttons();
     let fader = app.use_faders();
     let leds = app.use_leds();
     let midi = app.use_midi_output(midi_out, midi_chan);
+    let midi_button = app.use_midi_output(midi_out, button_ch);
     let i2c = app.use_i2c_output();
 
     let muted_glob = app.make_global(storage.query(|s| s.muted));
@@ -249,8 +285,12 @@ pub async fn run(
             }
 
             // Calculate output values
-            let muted = muted_glob.get();
-
+            let muted = if button_mode != 0 {
+                false
+            } else {
+                muted_glob.get()
+            };
+            let att_layer_value = storage.query(|s| s.att_saved);
             let val = if muted {
                 if bipolar {
                     2047
@@ -267,8 +307,6 @@ pub async fn run(
                 fad_val = clickless(fad_val, 2047 - curve.at((2047 - main_layer_value) * 2) / 2);
                 fad_val
             };
-
-            let att_layer_value = storage.query(|s| s.att_saved);
             let mut attenuated = if bipolar {
                 attenuate_bipolar(val, att_layer_value)
             } else {
@@ -278,12 +316,23 @@ pub async fn run(
                 attenuated = 4095 - attenuated;
             }
             out = slew_2(out, attenuated, 3);
-
-            if last_out != (out as u32 * 127) / 4095 {
-                midi.send_cc(midi_cc, out).await;
-            }
             jack.set_value(out);
-            last_out = (out as u32 * 127) / 4095;
+
+            let midi_out = if muted {
+                if bipolar {
+                    2047
+                } else {
+                    0
+                }
+            } else if !bipolar {
+                attenuate(main_layer_value, att_layer_value)
+            } else {
+                attenuate_bipolar(main_layer_value, att_layer_value)
+            };
+            if last_out != (midi_out as u32 * 127) / 4095 {
+                midi.send_cc(midi_cc, midi_out).await;
+            }
+            last_out = (midi_out as u32 * 127) / 4095;
 
             // Update LEDs
             match latch_active_layer {
@@ -333,20 +382,40 @@ pub async fn run(
 
     let button_handler = async {
         loop {
-            if on_release {
-                buttons.wait_for_up(0).await;
-            } else {
+            if button_mode == 2 {
+                // Momentary mode: handle both press and release
                 buttons.wait_for_down(0).await;
-            }
-            let muted = storage.modify_and_save(|s| {
-                s.muted = !s.muted;
-                s.muted
-            });
-            muted_glob.set(muted);
-            if muted {
-                leds.unset(0, Led::Button);
-            } else {
                 leds.set(0, Led::Button, led_color, Brightness::Mid);
+                midi_button.send_cc(button_cc, 4095).await;
+
+                buttons.wait_for_up(0).await;
+                leds.unset(0, Led::Button);
+                midi_button.send_cc(button_cc, 0).await;
+            } else {
+                // Mode 0 (Mute) or Mode 1 (CC toggle): toggle on configured edge
+                if on_release {
+                    buttons.wait_for_up(0).await;
+                } else {
+                    buttons.wait_for_down(0).await;
+                }
+
+                let muted = storage.modify_and_save(|s| {
+                    s.muted = !s.muted;
+                    s.muted
+                });
+                muted_glob.set(muted);
+
+                if muted {
+                    leds.unset(0, Led::Button);
+                    if button_mode == 1 {
+                        midi_button.send_cc(button_cc, 0).await;
+                    }
+                } else {
+                    leds.set(0, Led::Button, led_color, Brightness::Mid);
+                    if button_mode == 1 {
+                        midi_button.send_cc(button_cc, 4095).await;
+                    }
+                }
             }
         }
     };
@@ -374,7 +443,7 @@ pub async fn run(
     let scene_handler = async {
         loop {
             match app.wait_for_scene_event().await {
-                SceneEvent::LoadSscene(scene) => {
+                SceneEvent::LoadScene(scene) => {
                     storage.load_from_scene(scene).await;
                     if save_state {
                         let muted = storage.query(|s| s.muted);

@@ -151,7 +151,7 @@ pub async fn run(
     let curve = Curve::Exponential;
     let resolution = [384, 192, 96, 48, 24, 16, 12, 8, 6];
 
-    let wave = storage.query(|s| (s.wave));
+    let wave = storage.query(|s| s.wave);
 
     let color = get_color_for(wave);
 
@@ -329,7 +329,7 @@ pub async fn run(
     let scene_handler = async {
         loop {
             match app.wait_for_scene_event().await {
-                SceneEvent::LoadSscene(scene) => {
+                SceneEvent::LoadScene(scene) => {
                     storage.load_from_scene(scene).await;
                     let wave_saved = storage.query(|s| s.wave);
                     update_speed().await;

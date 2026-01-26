@@ -111,7 +111,7 @@ pub async fn run(
     params: &ParamStore<Params>,
     storage: &ManagedStorage<Storage>,
 ) {
-    let led_color = params.query(|p| (p.color));
+    let led_color = params.query(|p| p.color);
     let buttons = app.use_buttons();
     let faders = app.use_faders();
     let leds = app.use_leds();
@@ -131,21 +131,18 @@ pub async fn run(
     }
 
     let main_loop = async {
-        let mut oct = 0;
-        let mut st = 0;
-
         loop {
             app.delay_millis(1).await;
 
             let inval = _input.get_value() as i16;
 
-            oct = if storage.query(|s| s.offset_toggles[1]) {
+            let oct = if storage.query(|s| s.offset_toggles[1]) {
                 0
             } else {
                 (((storage.query(|s| s.oct) * 10 / 4095) as f32 - 5.) * 410.) as i16
             };
 
-            st = if storage.query(|s| s.offset_toggles[0]) {
+            let st = if storage.query(|s| s.offset_toggles[0]) {
                 0
             } else {
                 ((storage.query(|s| s.st) * 12 / 4095) as f32 * 410. / 12.) as i16
@@ -240,7 +237,7 @@ pub async fn run(
     let scene_handler = async {
         loop {
             match app.wait_for_scene_event().await {
-                SceneEvent::LoadSscene(scene) => {
+                SceneEvent::LoadScene(scene) => {
                     storage.load_from_scene(scene).await;
                     for chan in 0..2 {
                         if !storage.query(|s| s.offset_toggles[chan]) {
