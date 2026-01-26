@@ -8,7 +8,7 @@
 //!
 //! Code in this library module can be unit tested on a host computer but deployed onto a Faderpunk runtime target.
 
-use core::{panic};
+// use libc_print::std_name::{println};
 use serde::{Deserialize, Serialize};
 
 use crate::{Key, Note};
@@ -77,7 +77,7 @@ impl SomaGenerator {
         self.current_scale = scale;
 
         // Clear weights table
-        self.scale_weights = [1; 12];
+        self.scale_weights = [0; 12];
 
         // Compare scale notes to major scale notes to assign weights and sum total weight
         let mut total_weight: u8 = 0;
@@ -85,28 +85,30 @@ impl SomaGenerator {
         let major_mask = Key::Ionian.as_u16_key();
         for n in 0..12 {
             let scale_pos_has_note = (scale_mask >> (11 - n)) & 1;
-            let major_pos_has_note = (major_mask >> (11 - n)) & 1;
-            if (major_pos_has_note == scale_pos_has_note) && (scale_pos_has_note == 1) {
-                // Note is in both major and selected scale - normal weight
-                self.scale_weights[n] = 1;
-            } else if scale_pos_has_note == 0 {
-                // Note is not in scope, never pick this one
-                self.scale_weights[n] = 0;
+            if scale_pos_has_note == 1 {
+                let major_pos_has_note_at_same_degree = (major_mask >> (11 - n)) & 1;
+                // println!("Scale: {:?}, degree: {}, scale has note: {}, major has note: {}", scale as u8, n, scale_pos_has_note, major_pos_has_note_at_same_degree);
+                if major_pos_has_note_at_same_degree == 1 {
+                    // Note is in both major and selected scale - normal weight
+                    self.scale_weights[n] = 1;
+                } else {
+                    // Note is "spicy" - in selected scale but not major - higher weight
+                    self.scale_weights[n] = 3;
+                }
+                total_weight += self.scale_weights[n];
             } else {
-                // Note is "spicy" - in selected scale but not major - higher weight
-                self.scale_weights[n] = 3;
-            } 
-            total_weight += self.scale_weights[n];
+                // let major_pos_has_note_at_same_degree = (major_mask >> (11 - n)) & 1;
+                // println!("Scale: {:?}, degree: {}, scale has note: {}, major has note: {}", scale as u8, n, scale_pos_has_note, major_pos_has_note_at_same_degree);
+            }
         }
 
         // Update probabilities array with new weights
         for n in 0..12 {
             self.scale_probabilities[n] = self.rescale_fractional_probability_to_0_4095(self.scale_weights[n] as f32 / total_weight as f32);
+            // println!("scale probability degree: {}, prob: {}", n, self.scale_probabilities[n]);
         }
 
     }
-
-
 
     /// Generates next scale Note in the sequence
     /// 
@@ -195,18 +197,19 @@ impl SomaGenerator {
             if safe_random_probability <= accum { 
                 // Found our note
                 let note_index = n.0 as u8;
-                // Map note index to actual Note in scale
-                let mut scale_note_count = 0;
-                for i in 0..12 {
-                    let scale_pos_has_note = (scale_mask >> (11 - i)) & 1;
-                    if scale_pos_has_note == 1 {
-                        if scale_note_count == note_index {
-                            return Note::from(i as u8);
-                        } else {
-                            scale_note_count += 1;
-                        }
-                    }
-                }
+                return Note::from(note_index);
+                // // Map note index to actual Note in scale
+                // let mut scale_note_count = 0;
+                // for i in 0..12 {
+                //     let scale_pos_has_note = (scale_mask >> (11 - i)) & 1;
+                //     if scale_pos_has_note == 1 {
+                //         if scale_note_count == note_index {
+                //             return Note::from(i as u8);
+                //         } else {
+                //             scale_note_count += 1;
+                //         }
+                //     }
+                // }
             }
         }
     
@@ -218,8 +221,8 @@ impl SomaGenerator {
             }
         }
 
-        // Fallback - should never reach here as long as scale has at least one note!
-        panic!("weighted_pick_note_from_current_scale: failed to pick note from scale");
+        // Fallback if all else fails
+        Note::C
     }
 
   
@@ -304,7 +307,7 @@ mod tests {
         let (note3, _gate3) = s.generate_next_step(true, true, HALF_MAX_2_POW_12);
 
         // ASSERT
-        assert_eq!(note3, Note::A); 
+        assert_eq!(note3, Note::F); 
         assert_eq!(s.current_step, 3);
 
     }
@@ -380,6 +383,21 @@ mod tests {
 
     }
 
+     #[test]
+    fn test_generate_minor() {
+        // SETUP
+        let mut s = SomaGenerator::default();
+        s.compute_scale_probabilities(Key::Aeolian);
+
+        // EXECUTE - will pick first note in scale, a C
+        let (note, _gate) = s.generate_next_step(false, true, s.rescale_fractional_probability_to_0_4095(2.0 / 14.0));
+
+        // ASSERT
+        assert_eq!(note, Note::D); 
+        assert_eq!(s.current_step, 1);
+
+    }
+
     #[test]
     fn test_initialize_patterns() {
         // SETUP
@@ -392,7 +410,7 @@ mod tests {
 
         // ASSERT
         assert_eq!(s.pattern_length, MAX_SEQUENCE_LENGTH);
-        assert_eq!(s.note_pattern, [Note::GSharp; MAX_SEQUENCE_LENGTH]);
+        assert_eq!(s.note_pattern, [Note::F; MAX_SEQUENCE_LENGTH]);
         assert_eq!(s.gate_pattern, [true; MAX_SEQUENCE_LENGTH]);
 
 
