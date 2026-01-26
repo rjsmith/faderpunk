@@ -54,7 +54,8 @@
 //!
 //! ### Scale Morphing
 //! - Lock a pattern at 0%
-//! - Switch to a different scale  
+//! - Switch to a different scale in the Configurator 
+//! - Stop then restart the Faderpunk clock (Soma only checks for global scale updates when the clock is stopped)
 //! - Slowly increase probability to hear it morph
 //! - Lock it again when it sounds good
 //!
@@ -98,15 +99,13 @@ use embassy_futures::{
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use heapless::Vec;
 use libfp::{
-    ext::FromValue, 
-    soma_lib::MAX_SEQUENCE_LENGTH, soma_lib::SomaGenerator,
-    quantizer::Pitch,
-    latch::LatchLayer, AppIcon, Brightness, ClockDivision, Color, Config, Curve,
-    MidiCc, MidiChannel, MidiMode, MidiNote, MidiOut, Param, Range, Value, APP_MAX_PARAMS,
+    APP_MAX_PARAMS, AppIcon, Brightness, ClockDivision, Color, Config, Curve, Key, MidiCc, MidiChannel, MidiMode, MidiNote, MidiOut, Param, Range, Value, ext::FromValue, latch::LatchLayer, quantizer::Pitch, soma_lib::{MAX_SEQUENCE_LENGTH, SomaGenerator}
 };
 use serde::{Deserialize, Serialize};
 
 use crate::app::{App, AppParams, AppStorage, ClockEvent, Led, ManagedStorage, ParamStore, SceneEvent};
+use crate::tasks::global_config::{get_global_config};
+
 
 // TODO: Remove from final code
 use defmt::info;
@@ -221,6 +220,7 @@ pub struct Storage {
     octave_spread_prob_saved: u16,
     clock_resolution_saved: u16,
     length_saved: u16,
+    key_saved: u8,
 }
 
 impl Default for Storage {
@@ -231,6 +231,7 @@ impl Default for Storage {
             octave_spread_prob_saved: 0,
             clock_resolution_saved: 2048,
             length_saved: 8,
+            key_saved: 0, //C
         }
     }
 }
@@ -290,9 +291,13 @@ pub async fn run(app: &App<CHANNELS>,
     let midi = app.use_midi_output(midi_out, midi_chan);
     let recall_flag = app.make_global(false); // What is this for?
     let div_glob = app.make_global(CLOCK_RESOLUTION[0]);
-    let midi_note = app.make_global(MidiNote::default());
+    let midi_note_glob = app.make_global(MidiNote::default());
     let glob_latch_layer = app.make_global(LatchLayer::Main);
     let length_glob = app.make_global(8);
+
+    // Get global quantized key
+    let global_config = get_global_config();
+    let global_key = global_config.quantizer.key;
 
     // Switch off LEDs on both channels initially
     leds.set(0, Led::Button, led_color, Brightness::Off);
@@ -317,7 +322,9 @@ pub async fn run(app: &App<CHANNELS>,
         note_probabilities[n] = die.roll();
         gate_probabilities[n] = die.roll();
     } 
-    soma.initialize_patterns(8, libfp::Key::Phrygian, note_probabilities, gate_probabilities);
+    soma.initialize_patterns(8, global_key, note_probabilities, gate_probabilities);
+    drop(global_key);
+    drop(global_config);
 
     // Main sequencer task, clocked by internal clock
     let clock_loop = async {
@@ -329,9 +336,10 @@ pub async fn run(app: &App<CHANNELS>,
 
             match clock.wait_for_event(ClockDivision::_1).await {
                 ClockEvent::Reset => {
+                    info!("Soma: Reset received!");
                     clkn = 0;
                     if midi_mode == MidiMode::Note {
-                        midi.send_note_off(midi_note.get()).await;
+                        midi.send_note_off(midi_note_glob.get()).await;
                     }
                     soma.reset_current_step();
                 }
@@ -341,12 +349,13 @@ pub async fn run(app: &App<CHANNELS>,
                     // If on the right division, step the note and gate sequencers
                     if clkn % div == 0 {
 
+                        // Compute step mutation based on fader probabilities
                         let note_change_prob = storage.query(|s| s.note_flip_prob_saved);
                         let gate_change_prob = storage.query(|s| s.gate_flip_prob_saved); 
-
                         let flip_note = die.roll() < note_change_prob;
                         let flip_gate = die.roll() < gate_change_prob;
-                        let note_choice_probability = die.roll().clamp(0, 4095);
+                        let note_choice_probability = die.roll(); // Random number between 0 and 4095;
+
                         // Step the soma generator
                         let (note, gate) = soma.generate_next_step(
                             flip_gate,
@@ -382,7 +391,7 @@ pub async fn run(app: &App<CHANNELS>,
 
                         match midi_mode {
                             MidiMode::Note => {
-                                let note = midi_note.set(out_pitch.as_midi() + base_note);
+                                let note = midi_note_glob.set(out_pitch.as_midi() + base_note);
                                 midi.send_note_on(note, 4095).await;
                             }
                             MidiMode::Cc => {
@@ -396,7 +405,7 @@ pub async fn run(app: &App<CHANNELS>,
                             leds.set(1, Led::Top, led_color, Brightness::High);
                         } else {
                             gate_output.set_low().await; 
-                            // This shoul dbe redundant becauise of the gate length time handling code below
+                            // This should be redundant because of the gate length time handling code below
                             leds.unset(1, Led::Top);
                         }
 
@@ -411,7 +420,7 @@ pub async fn run(app: &App<CHANNELS>,
                         gate_output.set_low().await;
 
                         if midi_mode == MidiMode::Note {
-                            midi.send_note_off(midi_note.get()).await;
+                            midi.send_note_off(midi_note_glob.get()).await;
                         }
 
                     }
@@ -421,8 +430,20 @@ pub async fn run(app: &App<CHANNELS>,
                 ClockEvent::Stop => {
                     info!("Clock stopped");
                     if midi_mode == MidiMode::Note {
-                        midi.send_note_off(midi_note.get()).await;
+                        midi.send_note_off(midi_note_glob.get()).await;
                     }
+
+                    // Check if the global quantized key has been changed
+                    // NB: This MIGHT panic if is check happens at exactly the same time as global config is updated from the Configurator UI
+                    // TODO: Wait for firmware enhancement to provide a safe way to do this!
+                    let global_config = get_global_config();
+                    let global_key = global_config.quantizer.key;
+                    if global_key as u8 != storage.query(|s| s.key_saved) {
+                        info!("Global key changed to {:?}, updating soma generator", global_key as u8);
+                        storage.modify_and_save(|s| s.key_saved = global_key as u8);
+                        soma.compute_scale_probabilities(global_key);
+                    }
+                       
                 }
                 // Ignore other MIDI Clock events
                 _ => {}
@@ -483,7 +504,7 @@ pub async fn run(app: &App<CHANNELS>,
                             storage.modify_and_save(|s| s.clock_resolution_saved = new_value);
                             // We are changing clock division here, so switch off midi note
                             if midi_mode == MidiMode::Note {
-                                let note = midi_note.get();
+                                let note = midi_note_glob.get();
                                 midi.send_note_off(note).await;
                             }
                         }
