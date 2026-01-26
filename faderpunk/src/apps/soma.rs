@@ -99,7 +99,7 @@ use embassy_futures::{
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use heapless::Vec;
 use libfp::{
-    APP_MAX_PARAMS, AppIcon, Brightness, ClockDivision, Color, Config, Curve, Key, MidiCc, MidiChannel, MidiMode, MidiNote, MidiOut, Param, Range, Value, ext::FromValue, latch::LatchLayer, quantizer::Pitch, soma_lib::{MAX_SEQUENCE_LENGTH, SomaGenerator}
+    APP_MAX_PARAMS, AppIcon, Brightness, ClockDivision, Color, Config, MidiCc, MidiChannel, MidiMode, MidiNote, MidiOut, Param, Range, Value, ext::FromValue, latch::LatchLayer, quantizer::Pitch, soma_lib::{MAX_SEQUENCE_LENGTH, SomaGenerator}
 };
 use serde::{Deserialize, Serialize};
 
@@ -289,7 +289,6 @@ pub async fn run(app: &App<CHANNELS>,
     let mut clock = app.use_clock();
     let die = app.use_die();
     let midi = app.use_midi_output(midi_out, midi_chan);
-    let recall_flag = app.make_global(false); // What is this for?
     let div_glob = app.make_global(CLOCK_RESOLUTION[0]);
     let midi_note_glob = app.make_global(MidiNote::default());
     let glob_latch_layer = app.make_global(LatchLayer::Main);
@@ -306,26 +305,21 @@ pub async fn run(app: &App<CHANNELS>,
     let pitch_output = app.make_out_jack(0, range).await;
     let gate_output = app.make_gate_jack(1, 4095).await;
 
-    let (clock_res, mut length) =
+    let (clock_res, length) =
         storage.query(|s| (s.clock_resolution_saved, s.length_saved));
 
     div_glob.set(CLOCK_RESOLUTION[clock_res as usize / 512]);
 
-    let length =8;
-    // length_glob.set(length);
-
     // Set up Soma Generator
     let mut soma = SomaGenerator::default();
-    let mut note_probabilities = [0; libfp::soma_lib::MAX_SEQUENCE_LENGTH];
-    let mut gate_probabilities = [0; libfp::soma_lib::MAX_SEQUENCE_LENGTH];
-    for n in 0..length {
+    let mut note_probabilities = [0; MAX_SEQUENCE_LENGTH];
+    let mut gate_probabilities = [0; MAX_SEQUENCE_LENGTH];
+    for n in 0..length as usize {
         note_probabilities[n] = die.roll();
         gate_probabilities[n] = die.roll();
     } 
     soma.initialize_patterns(8, global_key, note_probabilities, gate_probabilities);
-    drop(global_key);
-    drop(global_config);
-
+   
     // Main sequencer task, clocked by internal clock
     let clock_loop = async {
         // Clock step counter
@@ -365,7 +359,7 @@ pub async fn run(app: &App<CHANNELS>,
 
                         // Apply octave variation (add between 0 and 3 octaves)
                         // `octave_spread range` is 2^12 = 4095 max, so spread of octave 0 (0) - 4095 (+3 octaves)
-                        let octave_spread_range  = (((storage.query(|s| s.octave_spread_prob_saved) as f32 / 4095.0) as f32 * MAX_OCTAVE_RANGE) as u16);
+                        let octave_spread_range  = ((storage.query(|s| s.octave_spread_prob_saved) as f32 / 4095.0) as f32 * MAX_OCTAVE_RANGE) as u16;
                         let mut octave_offset = 0;
                         if octave_spread_range > 0 {
                             let octave_chance = die.roll(); // 0 - 4095 random number
@@ -526,7 +520,7 @@ pub async fn run(app: &App<CHANNELS>,
             let mut length = length_rec.get();
             if shift && length_rec_flag.get() {
                 length += 1;
-                length_rec.set(length.min(libfp::soma_lib::MAX_SEQUENCE_LENGTH as u16));
+                length_rec.set(length.min(MAX_SEQUENCE_LENGTH as u16));
             }
         }
     };
@@ -560,7 +554,7 @@ pub async fn run(app: &App<CHANNELS>,
     let scene_handler = async {
         loop {
             match app.wait_for_scene_event().await {
-                SceneEvent::LoadSscene(scene) => {
+                SceneEvent::LoadScene(scene) => {
                     storage.load_from_scene(scene).await;
                     // TODO: Work out what to do - e.g. update xxx_glob variables
                 }
