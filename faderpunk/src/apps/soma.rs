@@ -112,7 +112,7 @@ use crate::app::{App, AppParams, AppStorage, ClockEvent, Led, ManagedStorage, Pa
 use defmt::info;
 
 pub const CHANNELS: usize = 2;
-pub const PARAMS: usize = 8;
+pub const PARAMS: usize = 9;
 
 // Clock division resolution, 24 = quarter notes at 24 PPQN
 const CLOCK_RESOLUTION: [u16; 8] = [24 /* quarter note */, 16 /* dotted eighth */, 12 /* eighth */, 8, 6 /* sixteenth note */, 4, 3, 2];
@@ -155,16 +155,20 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     name: "Range",
     variants: &[Range::_0_10V, Range::_0_5V, Range::_Neg5_5V],
 })
-.add_param(Param::MidiOut);
+.add_param(Param::MidiOut)
+.add_param(Param::bool {
+    name: "Midi only on gate",
+});
 pub struct Params {
     midi_mode: MidiMode,
     midi_channel: MidiChannel,
     midi_cc: MidiCc,
-    midi_out: MidiOut,
     midi_note: MidiNote,
     gatel: i32,
     color: Color,
     range: Range,
+    midi_out: MidiOut,
+    midi_on_gate: bool,
 }
 
 impl Default for Params {
@@ -174,10 +178,11 @@ impl Default for Params {
             midi_channel: MidiChannel::default(),
             midi_cc: MidiCc::from(40),
             midi_note: MidiNote::from(36),
-            midi_out: MidiOut::default(),
             gatel: 50,
             color: Color::Blue,
             range: Range::_0_5V,
+            midi_out: MidiOut::default(),
+            midi_on_gate: false,
         }
     }
 }
@@ -196,6 +201,8 @@ impl AppParams for Params {
             color: Color::from_value(values[5]),
             range: Range::from_value(values[6]),
             midi_out: MidiOut::from_value(values[7]),
+            midi_on_gate: bool::from_value(values[8]),
+
         })
     }
 
@@ -209,6 +216,7 @@ impl AppParams for Params {
         vec.push(self.color.into()).unwrap();
         vec.push(self.range.into()).unwrap();
         vec.push(self.midi_out.into()).unwrap();
+        vec.push(self.midi_on_gate.into()).unwrap();
         vec
     }
 }
@@ -272,7 +280,7 @@ pub async fn run(app: &App<CHANNELS>,
     info!("Soma started!");
     
     // Get app parameters
-    let (midi_out, midi_mode, midi_cc, led_color, midi_chan, base_note, gatel, range) = params
+    let (midi_out, midi_mode, midi_cc, led_color, midi_chan, base_note, gatel, range, midi_on_trigger) = params
     .query(|p| {
         (
             p.midi_out,
@@ -283,6 +291,7 @@ pub async fn run(app: &App<CHANNELS>,
             p.midi_note,
             p.gatel,
             p.range,
+            p.midi_on_gate,
         )
     });
 
@@ -404,16 +413,19 @@ pub async fn run(app: &App<CHANNELS>,
                         );
 
                         if !muted {
-                            match midi_mode {
-                                MidiMode::Note => {
-                                    let note = midi_note_glob.set(out_pitch.as_midi() + base_note);
-                                    midi.send_note_on(note, 4095).await;
-                                }
-                                MidiMode::Cc => {
-                                    midi.send_cc(midi_cc, out_pitch.as_counts(Range::_0_10V)).await;
+                            // Only send Midi if either not in midi-on-trigger mode, or midi-on-trigger and gate
+                            if !midi_on_trigger || gate && midi_on_trigger {
+                                match midi_mode {
+                                    MidiMode::Note => {
+                                        let note = midi_note_glob.set(out_pitch.as_midi() + base_note);
+                                        midi.send_note_on(note, 4095).await;
+                                    }
+                                    MidiMode::Cc => {
+                                        midi.send_cc(midi_cc, out_pitch.as_counts(Range::_0_10V)).await;
+                                    }
                                 }
                             }
-                              
+                          
                             // Output gate CV and set LED
                             if gate {
                                 gate_output.set_high().await;
@@ -426,9 +438,14 @@ pub async fn run(app: &App<CHANNELS>,
                             info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
 
                         } else {
-                            gate_output.set_low().await;     
+                            // Muted, so gate  off
                             leds.unset(1, Led::Top);
+                            gate_output.set_low().await;
 
+                            if midi_mode == MidiMode::Note {
+                                midi.send_note_off(midi_note_glob.get()).await;
+                            }
+                            
                             info!("Muted note at pattern step: {}", (clkn / div) % length);
 
                         }
@@ -464,6 +481,10 @@ pub async fn run(app: &App<CHANNELS>,
                 }
                 ClockEvent::Stop => {
                     info!("Clock stopped");
+                    // Gate  off
+                    leds.unset(1, Led::Top);
+                    gate_output.set_low().await;
+
                     if midi_mode == MidiMode::Note {
                         midi.send_note_off(midi_note_glob.get()).await;
                     }
