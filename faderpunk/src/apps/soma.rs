@@ -104,8 +104,6 @@ use libfp::{
 use serde::{Deserialize, Serialize};
 
 use crate::app::{App, AppParams, AppStorage, ClockEvent, Led, ManagedStorage, ParamStore, SceneEvent};
-use crate::tasks::global_config::{get_global_config};
-
 
 // TODO: Remove from final code
 use defmt::info;
@@ -231,7 +229,7 @@ impl Default for Storage {
             octave_spread_prob_saved: 0,
             clock_resolution_saved: 2048,
             length_saved: 8,
-            key_saved: 0, //C
+            key_saved: 0, // Chromatic
         }
     }
 }
@@ -293,10 +291,10 @@ pub async fn run(app: &App<CHANNELS>,
     let midi_note_glob = app.make_global(MidiNote::default());
     let glob_latch_layer = app.make_global(LatchLayer::Main);
     let length_glob = app.make_global(8);
+    let quantizer = app.use_quantizer(range);
 
-    // Get global quantized key
-    let global_config = get_global_config();
-    let global_key = global_config.quantizer.key;
+    // Get global config quantized key
+    let (global_key, _) = quantizer.get_scale().await;
 
     // Switch off LEDs on both channels initially
     leds.set(0, Led::Button, led_color, Brightness::Off);
@@ -405,10 +403,23 @@ pub async fn run(app: &App<CHANNELS>,
 
                         info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
 
-                   }
+                        // If just processed last step of `length` pattern
+                        if (clkn / div) % length == length - 1 {
+                            // Check for global scale change
+                            let (global_key, _) = quantizer.get_scale().await;
+                            
+                            if global_key as u8 != storage.query(|s| s.key_saved) {
+                                info!("Global key changed to {:?}, updating soma generator", global_key as u8);
+                                storage.modify_and_save(|s| s.key_saved = global_key as u8);
+                                soma.compute_scale_probabilities(global_key);
+                            }
+                        }
+                            
 
-                   // Wait for the gate time to elapse, then terminate the playing note, if any
-                   if clkn % div == (div * gatel as u16 / 100).clamp(1, div - 1) {
+                    }
+
+                    // Wait for the gate time to elapse, then terminate the playing note, if any
+                    if clkn % div == (div * gatel as u16 / 100).clamp(1, div - 1) {
                         // Gate  off
                         leds.unset(1, Led::Top);
                         gate_output.set_low().await;
@@ -426,18 +437,6 @@ pub async fn run(app: &App<CHANNELS>,
                     if midi_mode == MidiMode::Note {
                         midi.send_note_off(midi_note_glob.get()).await;
                     }
-
-                    // Check if the global quantized key has been changed
-                    // NB: This MIGHT panic if is check happens at exactly the same time as global config is updated from the Configurator UI
-                    // TODO: Wait for firmware enhancement to provide a safe way to do this!
-                    let global_config = get_global_config();
-                    let global_key = global_config.quantizer.key;
-                    if global_key as u8 != storage.query(|s| s.key_saved) {
-                        info!("Global key changed to {:?}, updating soma generator", global_key as u8);
-                        storage.modify_and_save(|s| s.key_saved = global_key as u8);
-                        soma.compute_scale_probabilities(global_key);
-                    }
-                       
                 }
                 // Ignore other MIDI Clock events
                 _ => {}
