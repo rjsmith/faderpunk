@@ -65,6 +65,9 @@
 //!
 //! ### Octave Dynamics
 //! Small amounts (10-30%) add variation without losing the melodic line.
+//! 
+//! ### Scenes
+//! Store different app settings in different Scenes, then performatively switch between them
 //!
 //! ## Experiments to Try
 //!
@@ -219,6 +222,7 @@ pub struct Storage {
     clock_resolution_saved: u16,
     length_saved: u16,
     key_saved: u8,
+    muted: bool,
 }
 
 impl Default for Storage {
@@ -230,6 +234,7 @@ impl Default for Storage {
             clock_resolution_saved: 2048,
             length_saved: 8,
             key_saved: 0, // Chromatic
+            muted: false,
         }
     }
 }
@@ -291,10 +296,20 @@ pub async fn run(app: &App<CHANNELS>,
     let midi_note_glob = app.make_global(MidiNote::default());
     let glob_latch_layer = app.make_global(LatchLayer::Main);
     let length_glob = app.make_global(8);
+    let muted_glob = app.make_global(storage.query(|s| s.muted));
+
     let quantizer = app.use_quantizer(range);
 
     // Get global config quantized key
     let (global_key, _) = quantizer.get_scale().await;
+
+    if muted_glob.get() {
+        leds.unset(0, Led::Button);
+        leds.unset(1, Led::Button);
+    } else {
+        leds.set(0, Led::Button, led_color, Brightness::Mid);
+        leds.unset(1, Led::Button);
+    }
 
     // Switch off LEDs on both channels initially
     leds.set(0, Led::Button, led_color, Brightness::Off);
@@ -321,7 +336,7 @@ pub async fn run(app: &App<CHANNELS>,
     // Main sequencer task, clocked by internal clock
     let clock_loop = async {
         // Clock step counter
-        let mut clkn = 0;
+        let mut clkn: u16 = 0;
         loop {
             let div = div_glob.get();
             let length = length_glob.get();
@@ -339,7 +354,7 @@ pub async fn run(app: &App<CHANNELS>,
                 ClockEvent::Tick => {
                    
                     // If on the right division, step the note and gate sequencers
-                    if clkn % div == 0 {
+                    if clkn.is_multiple_of(div) {
 
                         // Compute step mutation based on fader probabilities
                         let note_change_prob = storage.query(|s| s.note_flip_prob_saved);
@@ -357,7 +372,7 @@ pub async fn run(app: &App<CHANNELS>,
 
                         // Apply octave variation (add between 0 and 3 octaves)
                         // `octave_spread range` is 2^12 = 4095 max, so spread of octave 0 (0) - 4095 (+3 octaves)
-                        let octave_spread_range  = ((storage.query(|s| s.octave_spread_prob_saved) as f32 / 4095.0) as f32 * MAX_OCTAVE_RANGE) as u16;
+                        let octave_spread_range  = ((storage.query(|s| s.octave_spread_prob_saved) as f32 / 4095.0) * MAX_OCTAVE_RANGE) as u16;
                         let mut octave_offset = 0;
                         if octave_spread_range > 0 {
                             let octave_chance = die.roll(); // 0 - 4095 random number
@@ -368,11 +383,18 @@ pub async fn run(app: &App<CHANNELS>,
                         // Calculate output pitch
                         let out_pitch = Pitch {
                             octave: octave_offset,
-                            note: note.into(),
+                            note,
                         };
 
                         // Set output CV, gate and MIDI Note/CC
-                        let out_pitch_in_0_10v = out_pitch.as_counts(Range::_0_10V);
+                        let muted = muted_glob.get();
+
+                        let out_pitch_in_0_10v = if muted {
+                            0
+                        } else {
+                            out_pitch.as_counts(Range::_0_10V)
+                        };
+
                         pitch_output.set_value(out_pitch_in_0_10v);
                         leds.set(
                             0,
@@ -381,30 +403,38 @@ pub async fn run(app: &App<CHANNELS>,
                             Brightness::Custom((out_pitch_in_0_10v / 160) as u8), // TODO: Verify scaling
                         );
 
-                        match midi_mode {
-                            MidiMode::Note => {
-                                let note = midi_note_glob.set(out_pitch.as_midi() + base_note);
-                                midi.send_note_on(note, 4095).await;
+                        if !muted {
+                            match midi_mode {
+                                MidiMode::Note => {
+                                    let note = midi_note_glob.set(out_pitch.as_midi() + base_note);
+                                    midi.send_note_on(note, 4095).await;
+                                }
+                                MidiMode::Cc => {
+                                    midi.send_cc(midi_cc, out_pitch.as_counts(Range::_0_10V)).await;
+                                }
                             }
-                            MidiMode::Cc => {
-                                midi.send_cc(midi_cc, out_pitch.as_counts(Range::_0_10V)).await;
+                              
+                            // Output gate CV and set LED
+                            if gate {
+                                gate_output.set_high().await;
+                                leds.set(1, Led::Top, led_color, Brightness::High);
+                            } else {
+                                gate_output.set_low().await; 
+                                leds.unset(1, Led::Top);
                             }
-                        }
 
-                        // Output gate CV and set LED
-                        if gate {
-                            gate_output.set_high().await;
-                            leds.set(1, Led::Top, led_color, Brightness::High);
+                            info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
+
                         } else {
-                            gate_output.set_low().await; 
-                            // This should be redundant because of the gate length time handling code below
+                            gate_output.set_low().await;     
                             leds.unset(1, Led::Top);
-                        }
 
-                        info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
+                            info!("Muted note at pattern step: {}", (clkn / div) % length);
+
+                        }
 
                         // If just processed last step of `length` pattern
-                        if (clkn / div) % length == length - 1 {
+                        if (clkn / div).is_multiple_of(length) {
                             // Check for global scale change
                             let (global_key, _) = quantizer.get_scale().await;
                             
@@ -514,13 +544,29 @@ pub async fn run(app: &App<CHANNELS>,
 
     let fut3 = async {
         loop {
-            // Increment temporary recorded pattern length whilst shift button held down
-            let shift = buttons.wait_for_down(0).await;
+            buttons.wait_for_down(0).await;
             let mut length = length_rec.get();
-            if shift && length_rec_flag.get() {
+            if buttons.is_shift_pressed() && length_rec_flag.get() {
+                // Increment temporary recorded pattern length whilst shift button held down
                 length += 1;
                 length_rec.set(length.min(MAX_SEQUENCE_LENGTH as u16));
+            } else if !buttons.is_shift_pressed() {
+                // Toggle app muted state
+                let muted = storage.modify_and_save(|s| {
+                    s.muted = !s.muted;
+                    s.muted
+                });
+                muted_glob.set(muted);
+
+                if muted {
+                    leds.unset(0, Led::Button);
+                    leds.unset(1, Led::Button);
+                } else {
+                    leds.set(0, Led::Button, led_color, Brightness::Mid);
+                }
             }
+
+
         }
     };
 
@@ -555,7 +601,15 @@ pub async fn run(app: &App<CHANNELS>,
             match app.wait_for_scene_event().await {
                 SceneEvent::LoadScene(scene) => {
                     storage.load_from_scene(scene).await;
-                    // TODO: Work out what to do - e.g. update xxx_glob variables
+                    let muted = storage.query(|s| s.muted);
+                    muted_glob.set(muted);
+                    if muted {
+                        leds.unset(0, Led::Button);
+                        leds.unset(1, Led::Button);
+                    } else {
+                        leds.set(0, Led::Button, led_color, Brightness::Mid);
+                    }
+ 
                 }
 
                 SceneEvent::SaveScene(scene) => {
