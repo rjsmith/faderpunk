@@ -45,7 +45,7 @@
 //! | Fader 2 | Gate mutation % (0=locked, full=chaos) | Speed (clock divide)  | N/A |
 //! | LED 2 Top | Gate output indicator | N/A | N/A 
 //! | LED 2 Bottom | N/A | N/A | N/A
-//! | Fn 2    | N/A | N/A | N/A |
+//! | Fn 2    | Only send note or change CV on gate | N/A | N/A |
 //! 
 //! ## Usage Tips
 //!
@@ -97,7 +97,7 @@
 //! The weighted probability thing ensures each scale sounds like itself. The Turing Machine behavior creates organic evolution. It's that balance between random and intentional that makes it musical.
 //!
 use embassy_futures::{
-    join::join5, select::{select, select3}
+    join::join5, select::{select, select3, Either}
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use heapless::Vec;
@@ -112,7 +112,7 @@ use crate::app::{App, AppParams, AppStorage, ClockEvent, Led, ManagedStorage, Pa
 use defmt::info;
 
 pub const CHANNELS: usize = 2;
-pub const PARAMS: usize = 9;
+pub const PARAMS: usize = 8;
 
 // Clock division resolution, 24 = quarter notes at 24 PPQN
 const CLOCK_RESOLUTION: [u16; 8] = [24 /* quarter note */, 16 /* dotted eighth */, 12 /* eighth */, 8, 6 /* sixteenth note */, 4, 3, 2];
@@ -155,10 +155,7 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     name: "Range",
     variants: &[Range::_0_10V, Range::_0_5V, Range::_Neg5_5V],
 })
-.add_param(Param::MidiOut)
-.add_param(Param::bool {
-    name: "Midi only on gate",
-});
+.add_param(Param::MidiOut);
 pub struct Params {
     midi_mode: MidiMode,
     midi_channel: MidiChannel,
@@ -168,7 +165,6 @@ pub struct Params {
     color: Color,
     range: Range,
     midi_out: MidiOut,
-    midi_on_gate: bool,
 }
 
 impl Default for Params {
@@ -182,7 +178,6 @@ impl Default for Params {
             color: Color::Blue,
             range: Range::_0_5V,
             midi_out: MidiOut::default(),
-            midi_on_gate: false,
         }
     }
 }
@@ -201,8 +196,6 @@ impl AppParams for Params {
             color: Color::from_value(values[5]),
             range: Range::from_value(values[6]),
             midi_out: MidiOut::from_value(values[7]),
-            midi_on_gate: bool::from_value(values[8]),
-
         })
     }
 
@@ -216,7 +209,6 @@ impl AppParams for Params {
         vec.push(self.color.into()).unwrap();
         vec.push(self.range.into()).unwrap();
         vec.push(self.midi_out.into()).unwrap();
-        vec.push(self.midi_on_gate.into()).unwrap();
         vec
     }
 }
@@ -230,7 +222,8 @@ pub struct Storage {
     clock_resolution_saved: u16,
     length_saved: u16,
     key_saved: u8,
-    muted: bool,
+    muted_saved: bool,
+    note_only_on_gate_saved: bool,
 }
 
 impl Default for Storage {
@@ -242,7 +235,8 @@ impl Default for Storage {
             clock_resolution_saved: 2048,
             length_saved: 8,
             key_saved: 0, // Chromatic
-            muted: false,
+            muted_saved: false,
+            note_only_on_gate_saved: false,
         }
     }
 }
@@ -280,7 +274,7 @@ pub async fn run(app: &App<CHANNELS>,
     info!("Soma started!");
     
     // Get app parameters
-    let (midi_out, midi_mode, midi_cc, led_color, midi_chan, base_note, gatel, range, midi_on_trigger) = params
+    let (midi_out, midi_mode, midi_cc, led_color, midi_chan, base_note, gatel, range) = params
     .query(|p| {
         (
             p.midi_out,
@@ -291,7 +285,6 @@ pub async fn run(app: &App<CHANNELS>,
             p.midi_note,
             p.gatel,
             p.range,
-            p.midi_on_gate,
         )
     });
 
@@ -305,7 +298,8 @@ pub async fn run(app: &App<CHANNELS>,
     let midi_note_glob = app.make_global(MidiNote::default());
     let glob_latch_layer = app.make_global(LatchLayer::Main);
     let length_glob = app.make_global(8);
-    let muted_glob = app.make_global(storage.query(|s| s.muted));
+    let muted_glob = app.make_global(storage.query(|s| s.muted_saved));
+    let note_only_on_gate_glob = app.make_global(storage.query(|s| s.note_only_on_gate_saved));
 
     let quantizer = app.use_quantizer(range);
 
@@ -317,12 +311,12 @@ pub async fn run(app: &App<CHANNELS>,
         leds.unset(1, Led::Button);
     } else {
         leds.set(0, Led::Button, led_color, Brightness::Mid);
-        leds.unset(1, Led::Button);
+        if note_only_on_gate_glob.get() {
+            leds.set(1, Led::Button, led_color, Brightness::Mid);
+        } else {
+            leds.set(1, Led::Button, led_color, Brightness::Low);
+        }
     }
-
-    // Switch off LEDs on both channels initially
-    leds.set(0, Led::Button, led_color, Brightness::Off);
-    leds.set(1, Led::Button, led_color, Brightness::Off);
 
     let pitch_output = app.make_out_jack(0, range).await;
     let gate_output = app.make_gate_jack(1, 4095).await;
@@ -343,7 +337,7 @@ pub async fn run(app: &App<CHANNELS>,
     soma.initialize_patterns(8, global_key, note_probabilities, gate_probabilities);
    
     // Main sequencer task, clocked by internal clock
-    let clock_loop = async {
+    let clock_fut = async {
         // Clock step counter
         let mut clkn: u16 = 0;
         loop {
@@ -397,11 +391,14 @@ pub async fn run(app: &App<CHANNELS>,
 
                         // Set output CV, gate and MIDI Note/CC
                         let muted = muted_glob.get();
+                        let note_only_on_gate = note_only_on_gate_glob.get();
 
                         let out_pitch_in_0_10v = if muted {
                             0
-                        } else {
+                        } else if !note_only_on_gate || gate {
                             out_pitch.as_counts(Range::_0_10V)
+                        } else {
+                            0
                         };
 
                         pitch_output.set_value(out_pitch_in_0_10v);
@@ -414,7 +411,7 @@ pub async fn run(app: &App<CHANNELS>,
 
                         if !muted {
                             // Only send Midi if either not in midi-on-trigger mode, or midi-on-trigger and gate
-                            if !midi_on_trigger || gate && midi_on_trigger {
+                            if !note_only_on_gate || gate {
                                 match midi_mode {
                                     MidiMode::Note => {
                                         let note = midi_note_glob.set(out_pitch.as_midi() + base_note);
@@ -495,7 +492,7 @@ pub async fn run(app: &App<CHANNELS>,
         }
     };
 
-    let faders_loop = async {
+    let faders_fut = async {
         let mut latch = [
             app.make_latch(faders.get_value_at(0)),
             app.make_latch(faders.get_value_at(1)),
@@ -563,35 +560,53 @@ pub async fn run(app: &App<CHANNELS>,
     let length_rec_flag = app.make_global(false);
     let length_rec = app.make_global(0);
 
-    let fut3 = async {
+    let button_fut = async {
         loop {
-            buttons.wait_for_down(0).await;
-            let mut length = length_rec.get();
-            if buttons.is_shift_pressed() && length_rec_flag.get() {
-                // Increment temporary recorded pattern length whilst shift button held down
-                length += 1;
-                length_rec.set(length.min(MAX_SEQUENCE_LENGTH as u16));
-            } else if !buttons.is_shift_pressed() {
-                // Toggle app muted state
-                let muted = storage.modify_and_save(|s| {
-                    s.muted = !s.muted;
-                    s.muted
-                });
-                muted_glob.set(muted);
+            match select(buttons.wait_for_down(0), buttons.wait_for_down(1)).await {
+                Either::First(_) => {
+                    let mut length = length_rec.get();
+                    if buttons.is_shift_pressed() && length_rec_flag.get() {
+                        // Increment temporary recorded pattern length whilst shift button held down
+                        length += 1;
+                        length_rec.set(length.min(MAX_SEQUENCE_LENGTH as u16));
+                    } else if !buttons.is_shift_pressed() {
+                        // Toggle app muted state
+                        let muted = storage.modify_and_save(|s| {
+                            s.muted_saved = !s.muted_saved;
+                            s.muted_saved
+                        });
+                        muted_glob.set(muted);
 
-                if muted {
-                    leds.unset(0, Led::Button);
-                    leds.unset(1, Led::Button);
-                } else {
-                    leds.set(0, Led::Button, led_color, Brightness::Mid);
+                        if muted {
+                            leds.unset(0, Led::Button);
+                            leds.unset(1, Led::Button);
+                        } else {
+                            leds.set(0, Led::Button, led_color, Brightness::Mid);
+                            if note_only_on_gate_glob.get() {
+                                leds.set(1, Led::Button, led_color, Brightness::Mid)
+                            } else {
+                                leds.set(1, Led::Button, led_color, Brightness::Low)
+                            }
+                        }
+                    }
                 }
-            }
-
-
+                Either::Second(_) => {
+                    let note_only_on_gate = storage.modify_and_save(|s| {
+                        s.note_only_on_gate_saved = !s.note_only_on_gate_saved;
+                        s.note_only_on_gate_saved
+                    });
+                    note_only_on_gate_glob.set(note_only_on_gate);
+                    if note_only_on_gate {
+                        leds.set(1, Led::Button, led_color, Brightness::Mid);
+                    } else {
+                        leds.set(1, Led::Button, led_color, Brightness::Low);
+                    }
+                }
+            };
         }
     };
 
-    let fut4 = async {
+    let shift_fut = async {
         let mut shift_old = false;
 
         loop {
@@ -617,20 +632,26 @@ pub async fn run(app: &App<CHANNELS>,
         }
     };
 
-    let scene_handler = async {
+    let scene_fut = async {
         loop {
             match app.wait_for_scene_event().await {
                 SceneEvent::LoadScene(scene) => {
                     storage.load_from_scene(scene).await;
-                    let muted = storage.query(|s| s.muted);
+                    let muted = storage.query(|s| s.muted_saved);
                     muted_glob.set(muted);
+                    let note_only_on_gate = storage.query(|s| s.note_only_on_gate_saved);
+                    note_only_on_gate_glob.set(note_only_on_gate);
                     if muted {
                         leds.unset(0, Led::Button);
                         leds.unset(1, Led::Button);
                     } else {
                         leds.set(0, Led::Button, led_color, Brightness::Mid);
+                        if note_only_on_gate {
+                            leds.set(1, Led::Button, led_color, Brightness::Mid);
+                        } else {
+                            leds.set(1, Led::Button, led_color, Brightness::Low);
+                        }
                     }
- 
                 }
 
                 SceneEvent::SaveScene(scene) => {
@@ -640,6 +661,6 @@ pub async fn run(app: &App<CHANNELS>,
         }
     };
 
-    join5(clock_loop, faders_loop, fut3, fut4, scene_handler).await;
+    join5(clock_fut, faders_fut, button_fut, shift_fut, scene_fut).await;
 
 }
