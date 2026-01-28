@@ -296,6 +296,7 @@ pub async fn run(app: &App<CHANNELS>,
     let midi = app.use_midi_output(midi_out, midi_chan);
     let div_glob = app.make_global(CLOCK_RESOLUTION[0]);
     let midi_note_glob = app.make_global(MidiNote::default());
+    let midi_note_on_glob = app.make_global(false); // Tracks if midi note is sounding (true) or not
     let glob_latch_layer = app.make_global(LatchLayer::Main);
     let length_glob = app.make_global(8);
     let muted_glob = app.make_global(storage.query(|s| s.muted_saved));
@@ -348,8 +349,9 @@ pub async fn run(app: &App<CHANNELS>,
                 ClockEvent::Reset => {
                     info!("Soma: Reset received!");
                     clkn = 0;
-                    if midi_mode == MidiMode::Note {
+                    if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                         midi.send_note_off(midi_note_glob.get()).await;
+                        midi_note_on_glob.set(false);
                     }
                     soma.reset_current_step();
                 }
@@ -415,6 +417,7 @@ pub async fn run(app: &App<CHANNELS>,
                                 match midi_mode {
                                     MidiMode::Note => {
                                         let note = midi_note_glob.set(out_pitch.as_midi() + base_note);
+                                        midi_note_on_glob.set(true);
                                         midi.send_note_on(note, 4095).await;
                                     }
                                     MidiMode::Cc => {
@@ -439,8 +442,9 @@ pub async fn run(app: &App<CHANNELS>,
                             leds.unset(1, Led::Top);
                             gate_output.set_low().await;
 
-                            if midi_mode == MidiMode::Note {
+                            if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                                 midi.send_note_off(midi_note_glob.get()).await;
+                                midi_note_on_glob.set(false);
                             }
                             
                             info!("Muted note at pattern step: {}", (clkn / div) % length);
@@ -468,8 +472,9 @@ pub async fn run(app: &App<CHANNELS>,
                         leds.unset(1, Led::Top);
                         gate_output.set_low().await;
 
-                        if midi_mode == MidiMode::Note {
+                        if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                             midi.send_note_off(midi_note_glob.get()).await;
+                            midi_note_on_glob.set(false);
                         }
 
                     }
@@ -482,8 +487,9 @@ pub async fn run(app: &App<CHANNELS>,
                     leds.unset(1, Led::Top);
                     gate_output.set_low().await;
 
-                    if midi_mode == MidiMode::Note {
+                    if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                         midi.send_note_off(midi_note_glob.get()).await;
+                        midi_note_on_glob.set(false);
                     }
                 }
                 // Ignore other MIDI Clock events
@@ -544,9 +550,9 @@ pub async fn run(app: &App<CHANNELS>,
                             div_glob.set(CLOCK_RESOLUTION[new_value as usize / 512]);
                             storage.modify_and_save(|s| s.clock_resolution_saved = new_value);
                             // We are changing clock division here, so switch off midi note
-                            if midi_mode == MidiMode::Note {
-                                let note = midi_note_glob.get();
-                                midi.send_note_off(note).await;
+                            if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
+                                midi.send_note_off(midi_note_glob.get()).await;
+                                midi_note_on_glob.set(false);
                             }
                         }
                         _ => {}
