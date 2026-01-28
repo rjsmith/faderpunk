@@ -402,13 +402,16 @@ pub async fn run(app: &App<CHANNELS>,
                         } else {
                             0
                         };
-
                         pitch_output.set_value(out_pitch_in_0_10v);
+
+                        // If not muted, offset led brightness by 50% then scale v/o range in top half of brightness range
+                        let out_pitch_led = if muted {0} else {((out_pitch_in_0_10v / 32)  + 127).clamp(0, 255 ) as u8};
+                        info!("Setting chan 0 top LED to brightness {}", out_pitch_led);
                         leds.set(
                             0,
                             Led::Top,
                             led_color,
-                            Brightness::Custom((out_pitch_in_0_10v / 160) as u8), // TODO: Verify scaling
+                            Brightness::Custom(out_pitch_led),
                         );
 
                         if !muted {
@@ -435,7 +438,7 @@ pub async fn run(app: &App<CHANNELS>,
                                 leds.unset(1, Led::Top);
                             }
 
-                            info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
+                            // info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
 
                         } else {
                             // Muted, so gate  off
@@ -597,6 +600,7 @@ pub async fn run(app: &App<CHANNELS>,
                     }
                 }
                 Either::Second(_) => {
+                    // Toggling 2nd button toggles "note only on gate" state
                     let note_only_on_gate = storage.modify_and_save(|s| {
                         s.note_only_on_gate_saved = !s.note_only_on_gate_saved;
                         s.note_only_on_gate_saved
