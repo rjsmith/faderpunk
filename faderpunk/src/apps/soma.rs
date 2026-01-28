@@ -395,18 +395,17 @@ pub async fn run(app: &App<CHANNELS>,
                         let muted = muted_glob.get();
                         let note_only_on_gate = note_only_on_gate_glob.get();
 
-                        let out_pitch_in_0_10v = if muted {
+                        let out_pitch_in_range = if muted {
                             0
                         } else if !note_only_on_gate || gate {
-                            out_pitch.as_counts(Range::_0_10V)
+                            out_pitch.as_counts(range)
                         } else {
                             0
                         };
-                        pitch_output.set_value(out_pitch_in_0_10v);
+                        pitch_output.set_value(out_pitch_in_range);
 
                         // If not muted, offset led brightness by 50% then scale v/o range in top half of brightness range
-                        let out_pitch_led = if muted {0} else {((out_pitch_in_0_10v / 32)  + 127).clamp(0, 255 ) as u8};
-                        info!("Setting chan 0 top LED to brightness {}", out_pitch_led);
+                        let out_pitch_led = if muted {0} else {((out_pitch_in_range / 32)  + 127).clamp(0, 255 ) as u8};
                         leds.set(
                             0,
                             Led::Top,
@@ -438,7 +437,7 @@ pub async fn run(app: &App<CHANNELS>,
                                 leds.unset(1, Led::Top);
                             }
 
-                            // info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
+                            info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_0_10v);
 
                         } else {
                             // Muted, so gate  off
