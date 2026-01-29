@@ -46,6 +46,7 @@
 //! | LED 2 Top | Gate output indicator | N/A | N/A 
 //! | LED 2 Bottom | N/A | N/A | N/A
 //! | Fn 2    | Only send note or change CV on gate | N/A | N/A |
+//! | Reset   | Re-starts pattern from step 1 | | |
 //! 
 //! ## Usage Tips
 //!
@@ -110,6 +111,8 @@ use defmt::info;
 
 pub const CHANNELS: usize = 2;
 pub const PARAMS: usize = 8;
+
+const DEBUG: bool = true;
 
 // Clock division resolution, 24 = quarter notes at 24 PPQN
 const CLOCK_RESOLUTION: [u16; 8] = [24 /* quarter note */, 16 /* dotted eighth */, 12 /* eighth */, 8, 6 /* sixteenth note */, 4, 3, 2];
@@ -268,7 +271,8 @@ pub async fn run(app: &App<CHANNELS>,
     params: &ParamStore<Params>,
     storage: &ManagedStorage<Storage>,
 ) {
-    info!("Soma started!");
+
+    if DEBUG {info!("Soma: started!");}
     
     // Get app parameters
     let (midi_out, midi_mode, midi_cc, led_color, midi_chan, base_note, gatel, range) = params
@@ -289,21 +293,29 @@ pub async fn run(app: &App<CHANNELS>,
     let faders = app.use_faders();
     let leds = app.use_leds();
     let mut clock = app.use_clock();
-    let die = app.use_die();
     let midi = app.use_midi_output(midi_out, midi_chan);
-    let div_glob = app.make_global(CLOCK_RESOLUTION[0]);
+    let glob_latch_layer = app.make_global(LatchLayer::Main);
+
+    let (clock_res, length) =
+        storage.query(|s| (s.clock_resolution_saved, s.length_saved));
+    let div_glob = app.make_global(CLOCK_RESOLUTION[clock_res as usize / 512]);
+    let length_glob = app.make_global(storage.query(|s| s.length_saved));
     let midi_note_glob = app.make_global(MidiNote::default());
     let midi_note_on_glob = app.make_global(false); // Tracks if midi note is sounding (true) or not
-    let glob_latch_layer = app.make_global(LatchLayer::Main);
-    let length_glob = app.make_global(8);
     let muted_glob = app.make_global(storage.query(|s| s.muted_saved));
     let note_only_on_gate_glob = app.make_global(storage.query(|s| s.note_only_on_gate_saved));
 
+    let die = app.use_die();
     let quantizer = app.use_quantizer(range);
 
     // Get global config quantized key
     let (global_key, _) = quantizer.get_scale().await;
 
+    // Initialize jacks
+    let pitch_output = app.make_out_jack(0, range).await;
+    let gate_output = app.make_gate_jack(1, 4095).await;
+ 
+    // Initialize button states
     if muted_glob.get() {
         leds.unset(0, Led::Button);
         leds.unset(1, Led::Button);
@@ -315,36 +327,31 @@ pub async fn run(app: &App<CHANNELS>,
             leds.set(1, Led::Button, led_color, Brightness::Low);
         }
     }
-
-    let pitch_output = app.make_out_jack(0, range).await;
-    let gate_output = app.make_gate_jack(1, 4095).await;
-
-    let (clock_res, length) =
-        storage.query(|s| (s.clock_resolution_saved, s.length_saved));
-
-    div_glob.set(CLOCK_RESOLUTION[clock_res as usize / 512]);
-
-    // Set up Soma Generator
-    let mut soma = SomaGenerator::default();
-    let mut note_probabilities = [0; MAX_SEQUENCE_LENGTH];
-    let mut gate_probabilities = [0; MAX_SEQUENCE_LENGTH];
-    for n in 0..length as usize {
-        note_probabilities[n] = die.roll();
-        gate_probabilities[n] = die.roll();
-    } 
-    soma.initialize_patterns(8, global_key, note_probabilities, gate_probabilities);
-   
-    // Main sequencer task, clocked by internal clock
+  
+    // Main clocked sequencer task
     let clock_fut = async {
-        // Clock step counter
+
+         // Set up Soma Generator
+        let mut soma = SomaGenerator::default();
+        let mut note_probabilities = [0; MAX_SEQUENCE_LENGTH];
+        let mut gate_probabilities = [0; MAX_SEQUENCE_LENGTH];
+        for n in 0..length as usize {
+            note_probabilities[n] = die.roll();
+            gate_probabilities[n] = die.roll();
+        } 
+        soma.initialize_patterns(8, global_key, note_probabilities, gate_probabilities);
+
+        // Clock tick counter
         let mut clkn: u16 = 0;
+
+        // Main clock tick loop
         loop {
             let div = div_glob.get();
             let length = length_glob.get();
 
             match clock.wait_for_event(ClockDivision::_1).await {
                 ClockEvent::Reset => {
-                    info!("Soma: Reset received!");
+                    if DEBUG {info!("Soma: Reset received!");}
                     clkn = 0;
                     if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                         midi.send_note_off(midi_note_glob.get()).await;
@@ -363,8 +370,7 @@ pub async fn run(app: &App<CHANNELS>,
                         leds.set(0, Led::Bottom, led_color, Brightness::Custom(((255 / length) * pattern_step) as u8));
 
                         // Compute step mutation based on fader probabilities
-                        let note_change_prob = storage.query(|s| s.note_flip_prob_saved);
-                        let gate_change_prob = storage.query(|s| s.gate_flip_prob_saved); 
+                        let (note_change_prob, gate_change_prob) = storage.query(|s| (s.note_flip_prob_saved, s.gate_flip_prob_saved));
                         let flip_note = die.roll() < note_change_prob;
                         let flip_gate = die.roll() < gate_change_prob;
                         let note_choice_probability = die.roll(); // Random number between 0 and 4095;
@@ -395,7 +401,6 @@ pub async fn run(app: &App<CHANNELS>,
                         // Set output CV, gate and MIDI Note/CC
                         let muted = muted_glob.get();
                         let note_only_on_gate = note_only_on_gate_glob.get();
-
                         let out_pitch_in_range = if muted {
                             0
                         } else if !note_only_on_gate || gate {
@@ -438,29 +443,30 @@ pub async fn run(app: &App<CHANNELS>,
                                 leds.unset(1, Led::Top);
                             }
 
-                            info!("Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_range);
+                            if DEBUG {
+                                info!("Soma: Generated note at pattern step: {}, note flip: {}, note: {:?}, gate flip: {}, gate: {}, note prob: {}, out pitch 0-10V: {}", (clkn / div) % length, flip_note as u8, note as u8, flip_gate as u8, gate, note_choice_probability, out_pitch_in_range);
+                            }
 
                         } else {
                             // Muted, so gate  off
                             leds.unset(1, Led::Top);
                             gate_output.set_low().await;
-
                             if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                                 midi.send_note_off(midi_note_glob.get()).await;
                                 midi_note_on_glob.set(false);
                             }
                             
-                            info!("Muted note at pattern step: {}", (clkn / div) % length);
-
+                            if DEBUG {
+                                info!("Soma: Muted note at pattern step: {}", (clkn / div) % length);
+                            }
                         }
 
                         // If just processed last step of `length` pattern
                         if (clkn / div).is_multiple_of(length) {
                             // Check for global scale change
                             let (global_key, _) = quantizer.get_scale().await;
-                            
                             if global_key as u8 != storage.query(|s| s.key_saved) {
-                                info!("Global key changed to {:?}, updating soma generator", global_key as u8);
+                                if DEBUG { info!("Soma: Global key changed to {:?}, updating soma generator", global_key as u8);}
                                 storage.modify_and_save(|s| s.key_saved = global_key as u8);
                                 soma.compute_scale_probabilities(global_key);
                             }
@@ -474,7 +480,6 @@ pub async fn run(app: &App<CHANNELS>,
                         // Gate  off
                         leds.unset(1, Led::Top);
                         gate_output.set_low().await;
-
                         if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                             midi.send_note_off(midi_note_glob.get()).await;
                             midi_note_on_glob.set(false);
@@ -485,13 +490,12 @@ pub async fn run(app: &App<CHANNELS>,
                     clkn += 1;
                 }
                 ClockEvent::Stop => {
-                    info!("Clock stopped");
+                    if DEBUG {info!("Soma: Clock stopped");}
                     // Gate  off
                     leds.unset(1, Led::Top);
                     leds.unset(0, Led::Top);
                     leds.unset(0, Led::Bottom);
                     gate_output.set_low().await;
-
                     if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                         midi.send_note_off(midi_note_glob.get()).await;
                         midi_note_on_glob.set(false);
@@ -529,7 +533,6 @@ pub async fn run(app: &App<CHANNELS>,
                         }
                         LatchLayer::Alt => {
                             // Octave spread probability changed
-                            info!("Octave spread prob changed to {}", new_value);
                             storage.modify_and_save(|s| { s.octave_spread_prob_saved = new_value});   
                         }   
                         _ => {}
