@@ -15,9 +15,9 @@ pub mod ext;
 pub mod i2c_proto;
 pub mod latch;
 pub mod quantizer;
+pub mod soma_lib;
 pub mod types;
 pub mod utils;
-pub mod soma_lib;
 
 use constants::{
     CURVE_EXP, CURVE_LOG, WAVEFORM_SAW, WAVEFORM_SAW_INV, WAVEFORM_SINE, WAVEFORM_SQUARE,

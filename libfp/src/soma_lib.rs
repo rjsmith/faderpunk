@@ -1,6 +1,6 @@
 //!
 //! Shared (host / target) library module for Soma sequencer app
-//! 
+//!
 //! This is a port of the DistingNT Soma Stochastic Exotic Scale Sequencer written by @thorinside
 //! See: https://github.com/thorinside/soma/blob/main/soma.lua
 //!
@@ -15,8 +15,8 @@ use crate::{Key, Note};
 
 // Maximum sequencer length in # notes
 pub const MAX_SEQUENCE_LENGTH: usize = 64;
-const MAX_2_POW_12:u16 = 4095;
-const HALF_MAX_2_POW_12:u16 = MAX_2_POW_12 / 2;
+const MAX_2_POW_12: u16 = 4095;
+const HALF_MAX_2_POW_12: u16 = MAX_2_POW_12 / 2;
 
 /// Sequencer note generator logic for the Soma sequencer app.
 ///
@@ -31,7 +31,7 @@ pub struct SomaGenerator {
     #[serde(with = "serde_arrays")] // using because sequence length > 32
     gate_pattern: [bool; MAX_SEQUENCE_LENGTH],
     // Computed fractional probabilities of each note in a scale, sum to MAX_2_POW_12 (2^12-1)
-    scale_probabilities: [u16; 12], 
+    scale_probabilities: [u16; 12],
     // Generated sequence pattern length, in #notes
     pattern_length: usize,
     // Note weights for the current scale - higher weights for "spicy" notes
@@ -56,7 +56,7 @@ impl SomaGenerator {
 
     /// Moves next sequence step back to the start of the pattern
     pub fn reset_current_step(&mut self) {
-            self.current_step = 0;
+        self.current_step = 0;
     }
 
     /// Returns the current scale
@@ -65,13 +65,13 @@ impl SomaGenerator {
     }
 
     /// Computes scale note probabilities based on the selected key and scale weights
-    /// 
+    ///
     /// The next call to generate_next_step() will use these probabilities to mutate notes in the sequence.
     /// Updates internal probabilities and weights tables.
-    /// 
+    ///
     /// ## Arguments
     /// * `scale` - the scale to compute probabilities for, comparing against the major scale.
-    /// 
+    ///
     /// NB: Also changes the internal current scale to this scale
     pub fn compute_scale_probabilities(&mut self, scale: Key) {
         self.current_scale = scale;
@@ -104,70 +104,84 @@ impl SomaGenerator {
 
         // Update probabilities array with new weights
         for n in 0..12 {
-            self.scale_probabilities[n] = self.rescale_fractional_probability_to_0_4095(self.scale_weights[n] as f32 / total_weight as f32);
+            self.scale_probabilities[n] = self.rescale_fractional_probability_to_0_4095(
+                self.scale_weights[n] as f32 / total_weight as f32,
+            );
             // println!("scale probability degree: {}, prob: {}", n, self.scale_probabilities[n]);
         }
-
     }
 
     /// Generates next scale Note in the sequence
-    /// 
+    ///
     /// Advances the internal current step counter, mutates the note and gate at that step
     /// ## Arguments
     /// * `flipGate` - whether to flip the gate at the current step
     /// * `flipNote` - whether to flip the note at the current step
     /// * `random_probability` - random number 0 to MAX_2_POW_12 used to pick new note based on scale probabilities
-    /// 
+    ///
     /// ## Returns
     /// Tuple of (Note, gate state) for the generated step
-    pub fn generate_next_step(&mut self, flip_gate: bool, flip_note: bool, random_probability: u16) -> (Note, bool) {
+    pub fn generate_next_step(
+        &mut self,
+        flip_gate: bool,
+        flip_note: bool,
+        random_probability: u16,
+    ) -> (Note, bool) {
         let safe_random_probability = random_probability.clamp(0, MAX_2_POW_12);
 
         // Advance to next step
         self.current_step = (self.current_step % self.pattern_length) + 1;
 
         // Mutate note at current step based on probability
-        if flip_note {   
-            self.note_pattern[self.current_step] = self.weighted_pick_note_from_current_scale(safe_random_probability); 
-        }     
+        if flip_note {
+            self.note_pattern[self.current_step] =
+                self.weighted_pick_note_from_current_scale(safe_random_probability);
+        }
 
         // Mutate gate at current step based on probability
         if flip_gate {
             self.gate_pattern[self.current_step] = !self.gate_pattern[self.current_step];
         }
 
-         // Return generated note and gate
-        (self.note_pattern[self.current_step], self.gate_pattern[self.current_step])
-    }    
+        // Return generated note and gate
+        (
+            self.note_pattern[self.current_step],
+            self.gate_pattern[self.current_step],
+        )
+    }
 
     /**
      * Initializes and generates a new pattern of given length and scale
-     * 
+     *
      * ## Arguments
      * * `length` - length of the pattern to generate, in #notes
      * * `scale` - scale to use for the pattern
      * * `note_probability` - array of random integers 0 to 4095 used to pick new notes for each step
      * * `gate_probability` - array of random integers 0 to 4095 used to pick new gates for each step
      */
-    pub fn initialize_patterns(&mut self, length: usize, scale: Key, note_probability: [u16; MAX_SEQUENCE_LENGTH], gate_probability: [u16; MAX_SEQUENCE_LENGTH]) {
+    pub fn initialize_patterns(
+        &mut self,
+        length: usize,
+        scale: Key,
+        note_probability: [u16; MAX_SEQUENCE_LENGTH],
+        gate_probability: [u16; MAX_SEQUENCE_LENGTH],
+    ) {
         self.current_scale = scale;
-        self.pattern_length = length;   
+        self.pattern_length = length;
         self.current_step = 0;
         self.compute_scale_probabilities(scale);
         // Clear unused pattern slots
-        for n in length .. MAX_SEQUENCE_LENGTH {
+        for n in length..MAX_SEQUENCE_LENGTH {
             self.note_pattern[n] = Note::C;
             self.gate_pattern[n] = false;
         }
         // Generate starting pattern
-        for n in 0 .. length {
+        for n in 0..length {
             // TODO : Randomise!
-            self.note_pattern[n] = self.weighted_pick_note_from_current_scale(note_probability[n]); 
-            self.gate_pattern[n] = gate_probability[n].clamp(0, MAX_2_POW_12) > HALF_MAX_2_POW_12;   
+            self.note_pattern[n] = self.weighted_pick_note_from_current_scale(note_probability[n]);
+            self.gate_pattern[n] = gate_probability[n].clamp(0, MAX_2_POW_12) > HALF_MAX_2_POW_12;
         }
-        
     }
-
 }
 
 // Private methods
@@ -179,10 +193,10 @@ impl SomaGenerator {
 
     ///
     /// Returns a Note picked from the current scale based on pre-computed weighted probabilities
-    /// 
+    ///
     /// ## Arguments
     /// * `random_probability` - random number 0 to MAX_2_POW_12 used to pick new note based on scale probabilities (e.g. from a random number generator)
-    /// 
+    ///
     /// ## Returns              
     ///* Note picked from the current scale
     ///
@@ -194,25 +208,13 @@ impl SomaGenerator {
         let mut accum: u16 = 0;
         for n in self.scale_probabilities.iter().enumerate() {
             accum += n.1;
-            if safe_random_probability <= accum { 
+            if safe_random_probability <= accum {
                 // Found our note
                 let note_index = n.0 as u8;
                 return Note::from(note_index);
-                // // Map note index to actual Note in scale
-                // let mut scale_note_count = 0;
-                // for i in 0..12 {
-                //     let scale_pos_has_note = (scale_mask >> (11 - i)) & 1;
-                //     if scale_pos_has_note == 1 {
-                //         if scale_note_count == note_index {
-                //             return Note::from(i as u8);
-                //         } else {
-                //             scale_note_count += 1;
-                //         }
-                //     }
-                // }
             }
         }
-    
+
         // Fallback, return highest note in scale
         for i in (0..12).rev() {
             let scale_pos_has_note = (scale_mask >> (11 - i)) & 1;
@@ -224,8 +226,6 @@ impl SomaGenerator {
         // Fallback if all else fails
         Note::C
     }
-
-  
 }
 
 impl Default for SomaGenerator {
@@ -241,8 +241,6 @@ impl Default for SomaGenerator {
         }
     }
 }
-
-
 
 //
 // ************** UNIT TESTS ****************************
@@ -292,30 +290,29 @@ mod tests {
         let (note, gate) = s.generate_next_step(true, true, 0);
 
         // ASSERT
-        assert_eq!(note, Note::C); 
+        assert_eq!(note, Note::C);
         assert_eq!(gate, true);
         assert_eq!(s.current_step, 1);
 
-         // EXECUTE - will pick last note in scale, a B
+        // EXECUTE - will pick last note in scale, a B
         let (note2, _gate2) = s.generate_next_step(true, true, MAX_2_POW_12);
 
         // ASSERT
-        assert_eq!(note2, Note::B); 
+        assert_eq!(note2, Note::B);
         assert_eq!(s.current_step, 2);
 
         // EXECUTE - will pick middle note in scale, a F
         let (note3, _gate3) = s.generate_next_step(true, true, HALF_MAX_2_POW_12);
 
         // ASSERT
-        assert_eq!(note3, Note::F); 
+        assert_eq!(note3, Note::F);
         assert_eq!(s.current_step, 3);
-
     }
 
     #[test]
     fn test_compute_scale_probabilities_major_scale() {
         // SETUP
-        let mut s = SomaGenerator::default();   
+        let mut s = SomaGenerator::default();
 
         // EXECUTE
         s.compute_scale_probabilities(Key::Ionian);
@@ -338,13 +335,12 @@ mod tests {
         assert_eq!(s.scale_probabilities, expected_probabilities);
         // Check probabilities sum to MAX_2_POW_12, with tolerance for floating point errors
         assert_eq!(s.scale_probabilities.iter().sum::<u16>(), MAX_2_POW_12);
-
     }
 
-       #[test]
+    #[test]
     fn test_compute_scale_probabilities_phyrgian_scale() {
         // SETUP
-        let mut s = SomaGenerator::default();   
+        let mut s = SomaGenerator::default();
 
         // EXECUTE
         s.compute_scale_probabilities(Key::Phrygian);
@@ -375,47 +371,55 @@ mod tests {
         s.compute_scale_probabilities(Key::Phrygian);
 
         // EXECUTE - will pick first note in scale, a C
-        let (note, _gate) = s.generate_next_step(false, true, s.rescale_fractional_probability_to_0_4095(4.0 / 15.0));
+        let (note, _gate) = s.generate_next_step(
+            false,
+            true,
+            s.rescale_fractional_probability_to_0_4095(4.0 / 15.0),
+        );
 
         // ASSERT
-        assert_eq!(note, Note::CSharp); 
+        assert_eq!(note, Note::CSharp);
         assert_eq!(s.current_step, 1);
-
     }
 
-     #[test]
+    #[test]
     fn test_generate_minor() {
         // SETUP
         let mut s = SomaGenerator::default();
         s.compute_scale_probabilities(Key::Aeolian);
 
         // EXECUTE - will pick first note in scale, a C
-        let (note, _gate) = s.generate_next_step(false, true, s.rescale_fractional_probability_to_0_4095(2.0 / 14.0));
+        let (note, _gate) = s.generate_next_step(
+            false,
+            true,
+            s.rescale_fractional_probability_to_0_4095(2.0 / 14.0),
+        );
 
         // ASSERT
-        assert_eq!(note, Note::D); 
+        assert_eq!(note, Note::D);
         assert_eq!(s.current_step, 1);
-
     }
 
     #[test]
     fn test_initialize_patterns() {
         // SETUP
         let mut s = SomaGenerator::default();
-        let note_probability = [s.rescale_fractional_probability_to_0_4095(0.5); MAX_SEQUENCE_LENGTH];
-        let gate_probability = [s.rescale_fractional_probability_to_0_4095(0.6); MAX_SEQUENCE_LENGTH];
+        let note_probability =
+            [s.rescale_fractional_probability_to_0_4095(0.5); MAX_SEQUENCE_LENGTH];
+        let gate_probability =
+            [s.rescale_fractional_probability_to_0_4095(0.6); MAX_SEQUENCE_LENGTH];
 
         // EXECUTE
-        s.initialize_patterns(MAX_SEQUENCE_LENGTH, Key::Phrygian, note_probability, gate_probability);
+        s.initialize_patterns(
+            MAX_SEQUENCE_LENGTH,
+            Key::Phrygian,
+            note_probability,
+            gate_probability,
+        );
 
         // ASSERT
         assert_eq!(s.pattern_length, MAX_SEQUENCE_LENGTH);
         assert_eq!(s.note_pattern, [Note::F; MAX_SEQUENCE_LENGTH]);
         assert_eq!(s.gate_pattern, [true; MAX_SEQUENCE_LENGTH]);
-
-
     }
-
-
 }
-
