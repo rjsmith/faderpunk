@@ -38,8 +38,8 @@
 //! |---------|----------|---------|------|
 //! | Jack 1  | V/o Pitch CV out | N/A     | N/A  |
 //! | Fader 1 | Note mutation % (0=locked, full=chaos) | Octave spread % (0=none, full=3 octaves) | N/A|
-//! | LED 1 Top | V/o output level | Octave change chance in red | N/A
-//! | LED 1 Bottom | Flash at tempo | N/A | N/A
+//! | LED 1 Top | V/o CV output level | Octave change chance in red | N/A
+//! | LED 1 Bottom | Steps in pattern length | N/A | N/A
 //! | Fn 1    | Mute both outputs | Press button x times sets length (max 64 steps) | N/A |
 //! | Jack 2  | Gate output | N/A     | N/A  |
 //! | Fader 2 | Gate mutation % (0=locked, full=chaos) | Speed (clock divide)  | N/A |
@@ -54,7 +54,7 @@
 //!
 //! ### Scale Morphing
 //! - Lock a pattern at 0%
-//! - Switch to a different scale in the Configurator 
+//! - Switch to a different global scale in the Configurator 
 //! - Stop then restart the Faderpunk clock (Soma only checks for global scale updates when the clock is stopped)
 //! - Slowly increase probability to hear it morph
 //! - Lock it again when it sounds good
@@ -72,7 +72,7 @@
 //! ## Experiments to Try
 //!
 //! ### The Conversation
-//! Run two Somas at different clock divisions (one at 1/4, one at 1/3). Set them to complementary scales (like Dorian and Lydian). Use low probability (~15%) so they slowly diverge from similar starting points.
+//! Run two Somas at different clock divisions (one at 1/4, one at 1/3). Use low probability (~15%) so they slowly diverge from similar starting points.
 //!
 //! ### Ghost in the Machine  
 //! Set note probability to 1-2% - just enough that you occasionally hear a "mistake" that becomes part of the pattern. Like a musician occasionally hitting a wrong note that sounds right.
@@ -82,9 +82,6 @@
 //!
 //! ### Call and Response
 //! Use Faderpunk global Reset input rhythmically (not just at pattern start). Feed it a euclidean rhythm. The pattern keeps getting pulled back to step 1, creating phrases that mutate but keep returning home.
-//!
-//! ### Scale Automation
-//! Keep probability at ~40% but sequence through scales via encoder. Each scale change is like a harmonic filter being swept - the pattern reshapes itself to the new harmonic space.
 //!
 //! ### The Octave Scatter
 //! Gate probability at 0%, note probability at 0%, but octave at 100%. Same notes, same rhythm, but huge registral leaps. Run through a resonant filter that tracks pitch for wild timbral changes.
@@ -358,8 +355,12 @@ pub async fn run(app: &App<CHANNELS>,
 
                 ClockEvent::Tick => {
                    
-                    // If on the right division, step the note and gate sequencers
+                    // If advance to next pattern step
                     if clkn.is_multiple_of(div) {
+
+                        // Tracks #step in pattern, cycles from 1 to 'length'
+                        let pattern_step = ((clkn / div) % length) + 1;
+                        leds.set(0, Led::Bottom, led_color, Brightness::Custom(((255 / length) * pattern_step) as u8));
 
                         // Compute step mutation based on fader probabilities
                         let note_change_prob = storage.query(|s| s.note_flip_prob_saved);
@@ -404,8 +405,8 @@ pub async fn run(app: &App<CHANNELS>,
                         };
                         pitch_output.set_value(out_pitch_in_range);
 
-                        // If not muted, offset led brightness by 50% then scale v/o range in top half of brightness range
-                        let out_pitch_led = if muted {0} else {((out_pitch_in_range / 32)  + 127).clamp(0, 255 ) as u8};
+                        // Show CV output range in top 2/3 of LED brightness scale
+                        let out_pitch_led = if muted {0} else {((out_pitch_in_range / 24) + 85).clamp(0, 255 ) as u8};
                         leds.set(
                             0,
                             Led::Top,
@@ -487,12 +488,15 @@ pub async fn run(app: &App<CHANNELS>,
                     info!("Clock stopped");
                     // Gate  off
                     leds.unset(1, Led::Top);
+                    leds.unset(0, Led::Top);
+                    leds.unset(0, Led::Bottom);
                     gate_output.set_low().await;
 
                     if midi_mode == MidiMode::Note && midi_note_on_glob.get() {
                         midi.send_note_off(midi_note_glob.get()).await;
                         midi_note_on_glob.set(false);
                     }
+                    soma.reset_current_step();
                 }
                 // Ignore other MIDI Clock events
                 _ => {}
