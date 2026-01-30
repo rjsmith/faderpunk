@@ -103,6 +103,7 @@ use libfp::{
     APP_MAX_PARAMS, AppIcon, Brightness, ClockDivision, Color, Config, MidiCc, MidiChannel, MidiMode, MidiNote, MidiOut, Param, Range, Value, ext::FromValue, latch::LatchLayer, quantizer::Pitch, soma_lib::{MAX_SEQUENCE_LENGTH, SomaGenerator}
 };
 use serde::{Deserialize, Serialize};
+use libm::roundf;
 
 use crate::app::{App, AppParams, AppStorage, ClockEvent, Led, ManagedStorage, ParamStore, SceneEvent};
 
@@ -429,7 +430,10 @@ pub async fn run(app: &App<CHANNELS>,
                                         midi.send_note_on(note, 4095).await;
                                     }
                                     MidiMode::Cc => {
-                                        midi.send_cc(midi_cc, out_pitch.as_counts(Range::_0_10V)).await;
+                                        // Normalise out_cc_value to range 0-3V because max octave offset is +3 octaves (ie. +3 v)
+                                        // This ensures CC value uses full range 0 - 127 for given full range of Soma out_pitch octave range
+                                        let out_cc_value = roundf((out_pitch.as_v_oct() / 3.0) * 4095.0).clamp(0.0, 4095.0) as u16;
+                                        midi.send_cc(midi_cc, out_cc_value).await;
                                     }
                                 }
                             }
