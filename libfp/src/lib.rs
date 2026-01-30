@@ -15,6 +15,7 @@ pub mod ext;
 pub mod i2c_proto;
 pub mod latch;
 pub mod quantizer;
+pub mod soma_lib;
 pub mod types;
 pub mod utils;
 
