@@ -133,14 +133,6 @@ impl OutJack {
         };
         MAX_VALUES_DAC[self.channel].store(val, Ordering::Relaxed);
     }
-
-    pub fn get_value(&self) -> u16 {
-        let val = MAX_VALUES_DAC[self.channel].load(Ordering::Relaxed);
-        match self.range {
-            Range::_0_5V => val.saturating_mul(2),
-            _ => val,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
