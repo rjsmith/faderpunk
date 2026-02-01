@@ -11,11 +11,7 @@ use midly::{live::LiveEvent, num::u4, MidiMessage, PitchBend};
 use portable_atomic::Ordering;
 
 use libfp::{
-    latch::AnalogLatch,
-    quantizer::{Pitch, QuantizerState},
-    utils::scale_bits_12_7,
-    Brightness, ClockDivision, Color, Key, MidiCc, MidiChannel, MidiIn, MidiNote, MidiOut, Note,
-    Range,
+    Brightness, ClockDivision, Color, GLOBAL_CHANNELS, Key, MidiCc, MidiChannel, MidiIn, MidiNote, MidiOut, Note, Range, latch::AnalogLatch, quantizer::{Pitch, QuantizerState}, utils::scale_bits_12_7
 };
 
 use crate::{
@@ -136,6 +132,14 @@ impl OutJack {
             _ => value,
         };
         MAX_VALUES_DAC[self.channel].store(val, Ordering::Relaxed);
+    }
+
+    pub fn get_value(&self) -> u16 {
+        let val = MAX_VALUES_DAC[self.channel].load(Ordering::Relaxed);
+        match self.range {
+            Range::_0_5V => val.saturating_mul(2),
+            _ => val,
+        }
     }
 }
 
@@ -688,6 +692,14 @@ impl<const N: usize> App<N> {
             .await;
 
         GateJack::new(self.start_channel + chan)
+    }
+
+    // Obtain current output value from a specific jack
+    // If output jack voltage range is 0-10V or -5 to +5V, return vaklue is in rtange 0-4095
+    // If output jack voltage range in 0-5V, return vakue is in range 0-2047
+    pub fn get_out_jack_value(&self, chan: usize) -> u16 {
+        let chan = chan.clamp(0, GLOBAL_CHANNELS);
+        MAX_VALUES_DAC[chan].load(Ordering::Relaxed)
     }
 
     pub async fn delay_millis(&self, millis: u64) {
