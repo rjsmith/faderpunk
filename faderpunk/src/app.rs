@@ -687,8 +687,8 @@ impl<const N: usize> App<N> {
     }
 
     // Obtain current output value from a specific jack
-    // If output jack voltage range is 0-10V or -5 to +5V, return vaklue is in rtange 0-4095
-    // If output jack voltage range in 0-5V, return vakue is in range 0-2047
+    // If output jack voltage range is 0-10V or -5 to +5V, return value is in range 0-4095
+    // If output jack voltage range in 0-5V, return value is in range 0-2047
     pub fn get_out_jack_value(&self, chan: usize) -> u16 {
         let chan = chan.clamp(0, GLOBAL_CHANNELS);
         MAX_VALUES_DAC[chan].load(Ordering::Relaxed)
