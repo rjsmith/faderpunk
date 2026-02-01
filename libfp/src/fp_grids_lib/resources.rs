@@ -14,9 +14,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 // Based on the original Grids by Emilie Gillet.
-
+// Ported to Rust by Richard Smith @phommed
 // Constants from grids/pattern_generator.h (or relevant to data usage)
-pub const K_NUM_PARTS: u16 = 3;
+pub const K_NUM_PARTS: usize = 3;
 pub const K_NUM_STEPS_PER_PATTERN: u16 = 32;
 
 pub const LUT_RES_EUCLIDEAN_SIZE: usize = 1024;
