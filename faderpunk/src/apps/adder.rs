@@ -47,13 +47,13 @@ Param, Range, Value, ext::FromValue};
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore, OutJack, SceneEvent};
+use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore };
 
 // TODO: Remove from final code
 use defmt::info;
 
 pub const CHANNELS: usize = 1;
-pub const PARAMS: usize = 7;
+pub const PARAMS: usize = 8;
 
 // App configuration visible to the configurator
 pub static CONFIG: Config<PARAMS> = Config::new(
@@ -62,10 +62,10 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     Color::Yellow,
     AppIcon::KnobRound,
 )
-.add_param(Param::bool { name: "Enable 1st Channel" })
-.add_param(Param::i32 { name: "1st Jack Channel", min: 1, max: GLOBAL_CHANNELS as i32 })
-.add_param(Param::bool { name: "Enable 2nd Channel" })
-.add_param(Param::i32 { name: "2nd Jack Channel", min: 1, max: GLOBAL_CHANNELS as i32 })
+.add_param(Param::bool { name: "Enable Channel A" })
+.add_param(Param::i32 { name: "Channel A Jack", min: 1, max: GLOBAL_CHANNELS as i32 })
+.add_param(Param::bool { name: "Enable Channel B" })
+.add_param(Param::i32 { name: "Channel B Jack", min: 1, max: GLOBAL_CHANNELS as i32 })
 .add_param(Param::Color {
     name: "Color",
     variants: &[
@@ -82,35 +82,41 @@ pub static CONFIG: Config<PARAMS> = Config::new(
 .add_param(Param::Range {
     name: "Range",
     variants: &[Range::_0_10V, Range::_0_5V, Range::_Neg5_5V],
-}).add_param(Param::bool { name: "Quantize output" });
+}).add_param(Param::bool { name: "Quantize output" })
+.add_param(Param::Enum {
+    name: "Mode",
+    variants: &["A+B", "A-B", "Max", "Min", "Average"]});
 
 pub struct Params {
     // Will be added if = true
-    first_channel_enabled: bool,
+    channel_a_enabled: bool,
     // Output jack number 1-16 to be sampled
-    first_channel: i32,
+    channel_a_jack: i32,
     // Will be added if = true
-    second_channel_enabled: bool,
+    channel_b_enabled: bool,
     // Output jack number 1-16 to be sampled
-    second_channel: i32,
+    channel_b_jack: i32,
     // LED colour
     color: Color,
     // Output CV range
     range: Range,
     // Quantize output = true
     quantize: bool,
+    // Channel combination mode
+    out_mode: usize,
 }
 
 impl Default for Params {
     fn default() -> Self {
         Self {
-            first_channel_enabled: false,
-            first_channel: 1,
-            second_channel_enabled: false,
-            second_channel: 1,
+            channel_a_enabled: false,
+            channel_a_jack: 1,
+            channel_b_enabled: false,
+            channel_b_jack: 1,
             color: Color::Yellow,
             range: Range::_0_10V,
             quantize: false,
+            out_mode: 0,
         }
     }
 }
@@ -121,40 +127,42 @@ impl AppParams for Params {
             return None;
         }
         Some(Self {
-            first_channel_enabled: bool::from_value(values[0]),
-            first_channel: i32::from_value(values[1]),
-            second_channel_enabled: bool::from_value(values[2]),
-            second_channel: i32::from_value(values[3]),
+            channel_a_enabled: bool::from_value(values[0]),
+            channel_a_jack: i32::from_value(values[1]),
+            channel_b_enabled: bool::from_value(values[2]),
+            channel_b_jack: i32::from_value(values[3]),
             color: Color::from_value(values[4]),
             range: Range::from_value(values[5]),
             quantize: bool::from_value(values[6]),
+            out_mode: usize::from_value(values[7]),
         })
     }
 
     fn to_values(&self) -> Vec<Value, APP_MAX_PARAMS> {
         let mut vec = Vec::new();
-        vec.push(self.first_channel_enabled.into()).unwrap();
-        vec.push(self.first_channel.into()).unwrap();
-        vec.push(self.second_channel_enabled.into()).unwrap();
-        vec.push(self.second_channel.into()).unwrap();
+        vec.push(self.channel_a_enabled.into()).unwrap();
+        vec.push(self.channel_a_jack.into()).unwrap();
+        vec.push(self.channel_b_enabled.into()).unwrap();
+        vec.push(self.channel_b_jack.into()).unwrap();
         vec.push(self.color.into()).unwrap();
         vec.push(self.range.into()).unwrap();
         vec.push(self.quantize.into()).unwrap();
+        vec.push(self.out_mode.into()).unwrap();
         vec
     }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Storage {
-    first_channel_mute_saved: bool,
-    second_channel_mute_saved: bool,
+    channel_a_mute_saved: bool,
+    channel_b_mute_saved: bool,
 }
 
 impl Default for Storage {
     fn default() -> Self {
         Self {
-            first_channel_mute_saved: false,
-            second_channel_mute_saved: false,
+            channel_a_mute_saved: false,
+            channel_b_mute_saved: false,
         }
     }
 }
@@ -192,21 +200,21 @@ pub async fn run(app: &App<CHANNELS>,
 
 
     // first_channel and second_channel params are converted to usize in range 0 - (GLOBAL_CHANNELS-1)
-    let (first_channel_enabled, first_channel, second_channel_enabled, second_channel, led_color, range, quantize) = params
+    let (channel_a_enabled, channel_a_jack, channel_b_enabled, channel_b_jack, led_color, range, quantize) = params
     .query(|p| {
         (
-            p.first_channel_enabled,
-            p.first_channel,
-            p.second_channel_enabled,
-            p.second_channel,
+            p.channel_a_enabled,
+            p.channel_a_jack,
+            p.channel_b_enabled,
+            p.channel_b_jack,
             p.color,
             p.range,
-            p.quantize
+            p.quantize,
         )
     });
 
-    let first_channel_safe = (first_channel.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
-    let second_channel_safe = (second_channel.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
+    let channel_a_safe = (channel_a_jack.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
+    let channel_b_safe = (channel_b_jack.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
 
     let output = app.make_out_jack(0, range).await;
     let fader = app.use_faders();
@@ -214,12 +222,12 @@ pub async fn run(app: &App<CHANNELS>,
     let leds = app.use_leds();
 
     let quantizer = app.use_quantizer(range);
-    let first_channel_muted_glob = app.make_global(storage.query(|s| s.first_channel_mute_saved));
-    let second_channel_muted_glob = app.make_global(storage.query(|s| s.second_channel_mute_saved));
+    let channel_a_mute_glob = app.make_global(storage.query(|s| s.channel_a_mute_saved));
+    let channel_b_mute_glob = app.make_global(storage.query(|s| s.channel_b_mute_saved));
     let glob_latch_layer = app.make_global(LatchLayer::Main);
 
     // Set up initial state of LED button
-    if first_channel_muted_glob.get() {
+    if channel_a_mute_glob.get() {
         leds.unset(0, Led::Button);
     } else {
         leds.set(0, Led::Button, led_color, Brightness::Mid);
@@ -230,18 +238,18 @@ pub async fn run(app: &App<CHANNELS>,
        loop {
             app.delay_millis(1).await;
 
-            let first_channel_active = first_channel_enabled && !first_channel_muted_glob.get();
-            let second_channel_active = first_channel_enabled && !second_channel_muted_glob.get();
+            let channel_a_active = channel_a_enabled && !channel_a_mute_glob.get();
+            let channel_b_active = channel_b_enabled && !channel_b_mute_glob.get();
 
             // Sample and sum output channels
             let mut out = 0;
-            if first_channel_active && app.start_channel != first_channel_safe {
-                let first_channel_out_jack_value = app.get_out_jack_value(first_channel_safe);
-                out += first_channel_out_jack_value;
+            if channel_a_active && app.start_channel != channel_a_safe {
+                let channel_a_out_value = app.get_out_jack_value(channel_a_safe);
+                out += channel_a_out_value;
             }
-            if second_channel_active && app.start_channel != second_channel_safe {
-                let second_channel_out_jack_value = app.get_out_jack_value(second_channel_safe);
-                out += second_channel_out_jack_value
+            if channel_b_active && app.start_channel != channel_b_safe {
+                let channel_b_out_value = app.get_out_jack_value(channel_b_safe);
+                out += channel_b_out_value
             }
 
             // Hard clip summed values
@@ -258,7 +266,7 @@ pub async fn run(app: &App<CHANNELS>,
                 leds.set(0, Led::Top, led_color, Brightness::Custom((out_safe / 16) as u8));
             }
 
-            // info!("Summed out: {}, 1st channel enabled: {}[{}], 2nd channel enabled: {}[{}]", out_safe, first_channel_enabled, first_channel_safe, second_channel_enabled, second_channel_safe);
+            // info!("Summed out: {}, channel A enabled: {}[{}], channel B enabled: {}[{}]", out_safe, channel_a_enabled, channel_a_safe, channel_b_enabled, channel_b_safe);
 
        }
     };
@@ -269,10 +277,10 @@ pub async fn run(app: &App<CHANNELS>,
             if !buttons.is_shift_pressed() {
                 // First channel mute
                 let muted = storage.modify_and_save(|s| {
-                    s.first_channel_mute_saved = !s.first_channel_mute_saved;
-                    s.first_channel_mute_saved
+                    s.channel_a_mute_saved = !s.channel_a_mute_saved;
+                    s.channel_a_mute_saved
                 });
-                first_channel_muted_glob.set(muted);
+                channel_a_mute_glob.set(muted);
                 if muted {
                     leds.unset(0, Led::Button);
                 } else {
@@ -281,10 +289,10 @@ pub async fn run(app: &App<CHANNELS>,
             } else {
                 // Second channel mute
                 let muted = storage.modify_and_save(|s| {
-                    s.second_channel_mute_saved = !s.second_channel_mute_saved;
-                    s.second_channel_mute_saved
+                    s.channel_b_mute_saved = !s.channel_b_mute_saved;
+                    s.channel_b_mute_saved
                 });
-                second_channel_muted_glob.set(muted);
+                channel_b_mute_glob.set(muted);
                 if muted {
                     leds.unset(0, Led::Button);
                 } else {
@@ -302,14 +310,14 @@ pub async fn run(app: &App<CHANNELS>,
 
             // Change state of button when shift is pressed or released to show correct active state of first or second added channels
             if !buttons.is_shift_pressed() {
-                let muted = storage.query(|s| s.first_channel_mute_saved);
+                let muted = storage.query(|s| s.channel_a_mute_saved);
                 if muted {
                     leds.unset(0, Led::Button);
                 } else {
                     leds.set(0, Led::Button, led_color, Brightness::Mid);
                 }
             } else {
-                let muted = storage.query(|s| s.second_channel_mute_saved);
+                let muted = storage.query(|s| s.channel_b_mute_saved);
                 if muted {
                     leds.unset(0, Led::Button);
                 } else {
