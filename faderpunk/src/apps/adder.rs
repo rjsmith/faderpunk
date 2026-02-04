@@ -200,7 +200,7 @@ pub async fn run(app: &App<CHANNELS>,
 
 
     // first_channel and second_channel params are converted to usize in range 0 - (GLOBAL_CHANNELS-1)
-    let (channel_a_enabled, channel_a_jack, channel_b_enabled, channel_b_jack, led_color, range, quantize) = params
+    let (channel_a_enabled, channel_a_jack, channel_b_enabled, channel_b_jack, led_color, range, quantize, out_mode) = params
     .query(|p| {
         (
             p.channel_a_enabled,
@@ -210,6 +210,7 @@ pub async fn run(app: &App<CHANNELS>,
             p.color,
             p.range,
             p.quantize,
+            p.out_mode,
         )
     });
 
@@ -240,20 +241,51 @@ pub async fn run(app: &App<CHANNELS>,
 
             let channel_a_active = channel_a_enabled && !channel_a_mute_glob.get();
             let channel_b_active = channel_b_enabled && !channel_b_mute_glob.get();
+            let channel_a_use =  channel_a_active && app.start_channel != channel_a_safe;
+            let channel_b_use = channel_b_active && app.start_channel != channel_b_safe;
+            let mut a: i32 = if channel_a_use { 
+                    app.get_out_jack_value(channel_a_safe) as i32
+                } else {
+                    0
+                };
+            let mut b:i32 = if channel_b_use { 
+                    app.get_out_jack_value(channel_b_safe) as i32
+                } else {
+                    0
+                };
 
-            // Sample and sum output channels
-            let mut out = 0;
-            if channel_a_active && app.start_channel != channel_a_safe {
-                let channel_a_out_value = app.get_out_jack_value(channel_a_safe);
-                out += channel_a_out_value;
-            }
-            if channel_b_active && app.start_channel != channel_b_safe {
-                let channel_b_out_value = app.get_out_jack_value(channel_b_safe);
-                out += channel_b_out_value
-            }
+            let out:i32 = if out_mode == 0 {
+                a + b    
+            } else if out_mode == 1 {
+                a - b    
+            } else if out_mode == 2 {
+                // Max
+                if a > b { a } else { b }
+            } else if out_mode == 3 {
+                // If channel a or b are disabled, effectively remove them from the calculation,
+                // making sure that out = zero if BOTH are disabled
+                if !channel_a_use { a = 4095; } 
+                if !channel_b_use { b = 4095; }
+                if !channel_a_use && !channel_b_use {
+                    a = 0;
+                    b = 0;
+                };
+                if a < b { a } else { b }
+            } else if out_mode == 4 {
+                // If both channels active, output their average, else either a or b only
+                if channel_a_use && channel_b_use {
+                    (a + b) / 2
+                } else if channel_a_use && !channel_b_use {
+                    a
+                } else {
+                    b
+                }
+            } else { 
+                0 
+            };
 
             // Hard clip summed values
-            let out_safe = out.clamp(0, 4095);
+            let out_safe: u16 = (out.clamp(0, 4095)) as u16;
 
             // Output CV
             if quantize {
