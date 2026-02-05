@@ -53,7 +53,7 @@ use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore };
 use defmt::info;
 
 pub const CHANNELS: usize = 1;
-pub const PARAMS: usize = 8;
+pub const PARAMS: usize = 9;
 
 // App configuration visible to the configurator
 pub static CONFIG: Config<PARAMS> = Config::new(
@@ -84,8 +84,11 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     variants: &[Range::_0_10V, Range::_0_5V, Range::_Neg5_5V],
 }).add_param(Param::bool { name: "Quantize output" })
 .add_param(Param::Enum {
-    name: "Mode",
-    variants: &["A+B", "A-B", "Max", "Min", "Average"]});
+    name: "Output Mode",
+    variants: &["A+B", "A-B", "Max", "Min", "Average"]})
+.add_param(Param::Enum { 
+    name: "Read Mode",
+    variants: &["Read CV Jacks", "Read Gate Jacks"]});
 
 pub struct Params {
     // Will be added if = true
@@ -102,8 +105,10 @@ pub struct Params {
     range: Range,
     // Quantize output = true
     quantize: bool,
-    // Channel combination mode
+    // Output combination mode
     out_mode: usize,
+    // Mode to read channel A & B jacks
+    read_mode: usize,
 }
 
 impl Default for Params {
@@ -116,7 +121,8 @@ impl Default for Params {
             color: Color::Yellow,
             range: Range::_0_10V,
             quantize: false,
-            out_mode: 0,
+            out_mode: 0, // A + B
+            read_mode: 0, // CV Jacks
         }
     }
 }
@@ -135,6 +141,7 @@ impl AppParams for Params {
             range: Range::from_value(values[5]),
             quantize: bool::from_value(values[6]),
             out_mode: usize::from_value(values[7]),
+            read_mode: usize::from_value(values[8]),
         })
     }
 
@@ -148,23 +155,15 @@ impl AppParams for Params {
         vec.push(self.range.into()).unwrap();
         vec.push(self.quantize.into()).unwrap();
         vec.push(self.out_mode.into()).unwrap();
+        vec.push(self.read_mode.into()).unwrap();
         vec
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Storage {
     channel_a_mute_saved: bool,
     channel_b_mute_saved: bool,
-}
-
-impl Default for Storage {
-    fn default() -> Self {
-        Self {
-            channel_a_mute_saved: false,
-            channel_b_mute_saved: false,
-        }
-    }
 }
 
 impl AppStorage for Storage {}
@@ -200,7 +199,7 @@ pub async fn run(app: &App<CHANNELS>,
 
 
     // first_channel and second_channel params are converted to usize in range 0 - (GLOBAL_CHANNELS-1)
-    let (channel_a_enabled, channel_a_jack, channel_b_enabled, channel_b_jack, led_color, range, quantize, out_mode) = params
+    let (channel_a_enabled, channel_a_jack, channel_b_enabled, channel_b_jack, led_color, range, quantize, out_mode, read_mode) = params
     .query(|p| {
         (
             p.channel_a_enabled,
@@ -211,6 +210,7 @@ pub async fn run(app: &App<CHANNELS>,
             p.range,
             p.quantize,
             p.out_mode,
+            p.read_mode,
         )
     });
 
@@ -244,12 +244,20 @@ pub async fn run(app: &App<CHANNELS>,
             let channel_a_use =  channel_a_active && app.start_channel != channel_a_safe;
             let channel_b_use = channel_b_active && app.start_channel != channel_b_safe;
             let mut a: i32 = if channel_a_use { 
-                    app.get_out_jack_value(channel_a_safe) as i32
+                    if read_mode == 0 { 
+                        app.get_out_jack_value(channel_a_safe) as i32 
+                    } else { 
+                        app.get_out_gate_jack_value(channel_a_safe) as i32 
+                    }
                 } else {
                     0
                 };
             let mut b:i32 = if channel_b_use { 
-                    app.get_out_jack_value(channel_b_safe) as i32
+                    if read_mode == 0 {
+                        app.get_out_jack_value(channel_b_safe) as i32
+                    } else {
+                        app.get_out_gate_jack_value(channel_b_safe) as i32
+                    }
                 } else {
                     0
                 };

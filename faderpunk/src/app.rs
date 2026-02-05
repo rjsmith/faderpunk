@@ -11,7 +11,11 @@ use midly::{live::LiveEvent, num::u4, MidiMessage, PitchBend};
 use portable_atomic::Ordering;
 
 use libfp::{
-    Brightness, ClockDivision, Color, GLOBAL_CHANNELS, Key, MidiCc, MidiChannel, MidiIn, MidiNote, MidiOut, Note, Range, latch::AnalogLatch, quantizer::{Pitch, QuantizerState}, utils::scale_bits_12_7
+    latch::AnalogLatch,
+    quantizer::{Pitch, QuantizerState},
+    utils::scale_bits_12_7,
+    Brightness, ClockDivision, Color, Key, MidiCc, MidiChannel, MidiIn, MidiNote, MidiOut, Note,
+    Range, GLOBAL_CHANNELS,
 };
 
 use crate::{
@@ -686,12 +690,27 @@ impl<const N: usize> App<N> {
         GateJack::new(self.start_channel + chan)
     }
 
-    // Obtain current output value from a specific jack
+    // Obtain current output value from a specific CV jack
     // If output jack voltage range is 0-10V or -5 to +5V, return value is in range 0-4095
     // If output jack voltage range in 0-5V, return value is in range 0-2047
+    //
+    // If you point this at a gate out jack by mistake, it will return 0.
+    //
     pub fn get_out_jack_value(&self, chan: usize) -> u16 {
         let chan = chan.clamp(0, GLOBAL_CHANNELS);
         MAX_VALUES_DAC[chan].load(Ordering::Relaxed)
+    }
+
+    // Obtain current gate value from a specific Gate Jack.
+    // If gate is hi, will return 4095
+    // If gate is lo, will return 0
+    pub fn get_out_gate_jack_value(&self, chan: usize) -> u16 {
+        let chan = chan.clamp(0, GLOBAL_CHANNELS);
+        if MAX_TRIGGERS_GPO[chan].load(Ordering::Relaxed) == 2 {
+            4095
+        } else {
+            0
+        }
     }
 
     pub async fn delay_millis(&self, millis: u64) {
