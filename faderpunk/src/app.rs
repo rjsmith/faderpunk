@@ -702,14 +702,15 @@ impl<const N: usize> App<N> {
     }
 
     // Obtain current gate value from a specific Gate Jack.
-    // If gate is hi, will return 4095
-    // If gate is lo, will return 0
-    pub fn get_out_gate_jack_value(&self, chan: usize) -> u16 {
+    // If gate is hi, will return true
+    // If gate is lo, will return false
+    pub fn get_out_gate_jack_is_high(&self, chan: usize) -> bool {
         let chan = chan.clamp(0, GLOBAL_CHANNELS);
-        if MAX_TRIGGERS_GPO[chan].load(Ordering::Relaxed) == 2 {
-            4095
+        let gate = MAX_TRIGGERS_GPO[chan].load(Ordering::Relaxed);
+        if gate == 4 {
+            true
         } else {
-            0
+            false
         }
     }
 

@@ -1,15 +1,23 @@
-//! Adder app
+//! # CV Combine app
 //! 
-//! Precision CV adder / quantizer of one or two other output CV jacks belonging to other apps
+//! Precision CV adder / combiner / quantizer of one or two other output variable CV jacks belonging to other apps
 //! 
 //! This app is able to sum the output voltages of up to two other specified output jacks belonging to other apps in the same layout.
-//! It simulates the behaviour of an Eurorack precision adder module.
+//! It simulates the behaviour of Eurorack precision adder / CV math modules.
 //! 
-//! The app adds the one or two sampled output jacks together, optionally quantises the sum, then re-scales the output signal to the required Adder output range.
+//! The app combines the one or two sampled CV output jacks together, optionally quantises the sum, then re-scales the output signal to the required output voltage range.
 //! 
-//! The output CV range can be configured, and the signal optionally quantized by the global quantizer.
+//! If the summed CV from the two sampled output jacks exceed the min and max of the output Range, the summed CV will be hardclipped to the min or max of the Range.
 //! 
-//! If the summed CV from the two sampled output jacks exceed the equivalent of 10V, the summed CV will be hardclipped to a max 
+//! ## Combine Modes
+//! 
+//! The app has 5 "Combine Modes" for combining the CV from the two sampled jacks:
+//! 1. A + B: Sums the CV from the two jacks together,
+//! 2. A - B: Subtracts the CV of the second jack from the first,
+//! 3. Max: Outputs the higher of the two CVs,
+//! 4. Min: Outputs the lower of the two CVs,
+//! 5. Average: Outputs the average of the two CVs (if both channels active)
+//! 
 //! 
 //! ## Hardware Mapping
 //! 
@@ -26,12 +34,8 @@
 //! ### Steevio Sequencing
 //! Replicate the magic sequencing techniques of the Welsh modular musician, Steevio!:
 //! 1. Set up a "Sequencer" 8-channel app with two note patterns with different lengths and tempo (e.g. 5 and 7 steps).
-//! 2. Place an "Adder" app somewhere else on the layout, configuring its "1st" and "2nd" Jack channels to the first two "CV Output" jacks of the Sequencer.
-//! 3. Set the Adder's output range to 0-10V (to match the fixed 0-10V output range of the Sequencer app).
-//! 
-//! ### Combine drum triggers
-//! Use the Adder to sum the gate or trigger signals from two other app channels (e.g. "Euclid" and "Random Trigger"), replicatng a typical Eurorack "or" logic processor.
-//! It's a great way of creating more rhythms from a smaller number of trigger sources.
+//! 2. Place an "Combine" app in "CV Mode" somewhere else on the layout, configuring its "1st" and "2nd" Jack channels to the first two "CV Output" jacks of the Sequencer.
+//! 3. Set the Combine's output range to 0-10V (to match the fixed 0-10V output range of the Sequencer app).
 //! 
 //!
 
@@ -53,11 +57,11 @@ use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore };
 use defmt::info;
 
 pub const CHANNELS: usize = 1;
-pub const PARAMS: usize = 9;
+pub const PARAMS: usize = 8;
 
 // App configuration visible to the configurator
 pub static CONFIG: Config<PARAMS> = Config::new(
-    "CV Adder",
+    "CV Combine",
     "Adds two CV outputs from other channels, with octave offset and optional global quantization",
     Color::Yellow,
     AppIcon::KnobRound,
@@ -84,21 +88,18 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     variants: &[Range::_0_10V, Range::_0_5V, Range::_Neg5_5V],
 }).add_param(Param::bool { name: "Quantize output" })
 .add_param(Param::Enum {
-    name: "Output Mode",
-    variants: &["A+B", "A-B", "Max", "Min", "Average"]})
-.add_param(Param::Enum { 
-    name: "Read Mode",
-    variants: &["Read CV Jacks", "Read Gate Jacks"]});
+    name: "Combine Mode",
+    variants: &["A+B", "A-B", "Max", "Min", "Average"]});
 
 pub struct Params {
     // Will be added if = true
     channel_a_enabled: bool,
-    // Output jack number 1-16 to be sampled
-    channel_a_jack: i32,
+    // Output jack number 1 - GLOBAL_CHANNELS to be sampled
+    channel_a_jack_num: i32,
     // Will be added if = true
     channel_b_enabled: bool,
-    // Output jack number 1-16 to be sampled
-    channel_b_jack: i32,
+    // Output jack number 1 - GLOBAL_CHANNELS to be sampled
+    channel_b_jack_num: i32,
     // LED colour
     color: Color,
     // Output CV range
@@ -106,23 +107,20 @@ pub struct Params {
     // Quantize output = true
     quantize: bool,
     // Output combination mode
-    out_mode: usize,
-    // Mode to read channel A & B jacks
-    read_mode: usize,
+    combine_mode: usize,
 }
 
 impl Default for Params {
     fn default() -> Self {
         Self {
             channel_a_enabled: false,
-            channel_a_jack: 1,
+            channel_a_jack_num: 1,
             channel_b_enabled: false,
-            channel_b_jack: 1,
+            channel_b_jack_num: 1,
             color: Color::Yellow,
             range: Range::_0_10V,
             quantize: false,
-            out_mode: 0, // A + B
-            read_mode: 0, // CV Jacks
+            combine_mode: 0, // A + B
         }
     }
 }
@@ -134,28 +132,26 @@ impl AppParams for Params {
         }
         Some(Self {
             channel_a_enabled: bool::from_value(values[0]),
-            channel_a_jack: i32::from_value(values[1]),
+            channel_a_jack_num: i32::from_value(values[1]),
             channel_b_enabled: bool::from_value(values[2]),
-            channel_b_jack: i32::from_value(values[3]),
+            channel_b_jack_num: i32::from_value(values[3]),
             color: Color::from_value(values[4]),
             range: Range::from_value(values[5]),
             quantize: bool::from_value(values[6]),
-            out_mode: usize::from_value(values[7]),
-            read_mode: usize::from_value(values[8]),
+            combine_mode: usize::from_value(values[7]),
         })
     }
 
     fn to_values(&self) -> Vec<Value, APP_MAX_PARAMS> {
         let mut vec = Vec::new();
         vec.push(self.channel_a_enabled.into()).unwrap();
-        vec.push(self.channel_a_jack.into()).unwrap();
+        vec.push(self.channel_a_jack_num.into()).unwrap();
         vec.push(self.channel_b_enabled.into()).unwrap();
-        vec.push(self.channel_b_jack.into()).unwrap();
+        vec.push(self.channel_b_jack_num.into()).unwrap();
         vec.push(self.color.into()).unwrap();
         vec.push(self.range.into()).unwrap();
         vec.push(self.quantize.into()).unwrap();
-        vec.push(self.out_mode.into()).unwrap();
-        vec.push(self.read_mode.into()).unwrap();
+        vec.push(self.combine_mode.into()).unwrap();
         vec
     }
 }
@@ -199,23 +195,22 @@ pub async fn run(app: &App<CHANNELS>,
 
 
     // first_channel and second_channel params are converted to usize in range 0 - (GLOBAL_CHANNELS-1)
-    let (channel_a_enabled, channel_a_jack, channel_b_enabled, channel_b_jack, led_color, range, quantize, out_mode, read_mode) = params
+    let (channel_a_enabled, channel_a_jack_num, channel_b_enabled, channel_b_jack_num, led_color, range, quantize, combine_mode) = params
     .query(|p| {
         (
             p.channel_a_enabled,
-            p.channel_a_jack,
+            p.channel_a_jack_num,
             p.channel_b_enabled,
-            p.channel_b_jack,
+            p.channel_b_jack_num,
             p.color,
             p.range,
             p.quantize,
-            p.out_mode,
-            p.read_mode,
+            p.combine_mode,
         )
     });
 
-    let channel_a_safe = (channel_a_jack.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
-    let channel_b_safe = (channel_b_jack.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
+    let channel_a_safe = (channel_a_jack_num.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
+    let channel_b_safe = (channel_b_jack_num.clamp(1, GLOBAL_CHANNELS as i32) - 1) as usize;
 
     let output = app.make_out_jack(0, range).await;
     let fader = app.use_faders();
@@ -244,32 +239,28 @@ pub async fn run(app: &App<CHANNELS>,
             let channel_a_use =  channel_a_active && app.start_channel != channel_a_safe;
             let channel_b_use = channel_b_active && app.start_channel != channel_b_safe;
             let mut a: i32 = if channel_a_use { 
-                    if read_mode == 0 { 
+                   
                         app.get_out_jack_value(channel_a_safe) as i32 
-                    } else { 
-                        app.get_out_gate_jack_value(channel_a_safe) as i32 
-                    }
+                   
                 } else {
                     0
                 };
             let mut b:i32 = if channel_b_use { 
-                    if read_mode == 0 {
+                   
                         app.get_out_jack_value(channel_b_safe) as i32
-                    } else {
-                        app.get_out_gate_jack_value(channel_b_safe) as i32
-                    }
+                    
                 } else {
                     0
                 };
 
-            let out:i32 = if out_mode == 0 {
+            let out:i32 = if combine_mode == 0 {
                 a + b    
-            } else if out_mode == 1 {
+            } else if combine_mode == 1 {
                 a - b    
-            } else if out_mode == 2 {
+            } else if combine_mode == 2 {
                 // Max
                 if a > b { a } else { b }
-            } else if out_mode == 3 {
+            } else if combine_mode == 3 {
                 // If channel a or b are disabled, effectively remove them from the calculation,
                 // making sure that out = zero if BOTH are disabled
                 if !channel_a_use { a = 4095; } 
@@ -279,7 +270,7 @@ pub async fn run(app: &App<CHANNELS>,
                     b = 0;
                 };
                 if a < b { a } else { b }
-            } else if out_mode == 4 {
+            } else if combine_mode == 4 {
                 // If both channels active, output their average, else either a or b only
                 if channel_a_use && channel_b_use {
                     (a + b) / 2
@@ -348,7 +339,7 @@ pub async fn run(app: &App<CHANNELS>,
 
             glob_latch_layer.set(LatchLayer::from(buttons.is_shift_pressed()));
 
-            // Change state of button when shift is pressed or released to show correct active state of first or second added channels
+            // Change state of button when shift is pressed or released to show correct active state of channels A & B
             if !buttons.is_shift_pressed() {
                 let muted = storage.query(|s| s.channel_a_mute_saved);
                 if muted {
