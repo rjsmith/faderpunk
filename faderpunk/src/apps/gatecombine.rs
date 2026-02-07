@@ -29,8 +29,9 @@ use embassy_futures::{
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use heapless::Vec;
 use libfp::{
-    APP_MAX_PARAMS, AppIcon, Brightness, Color, Config, GLOBAL_CHANNELS,     latch::LatchLayer,
-Param, Range, Value, ext::FromValue};
+    APP_MAX_PARAMS, AppIcon, Brightness, Color, Config, GLOBAL_CHANNELS,
+         latch::LatchLayer,
+        Param, Value, ext::FromValue};
 
 use serde::{Deserialize, Serialize};
 
@@ -207,12 +208,12 @@ pub async fn run(app: &App<CHANNELS>,
             let channel_a_use =  channel_a_active && app.start_channel != channel_a_safe;
             let channel_b_use = channel_b_active && app.start_channel != channel_b_safe;
             let a_is_high  = if channel_a_use { 
-                    app.get_out_gate_jack_is_high(channel_a_safe)
+                    App::<CHANNELS>::get_out_global_gate_jack_is_high(channel_a_safe)
                 } else {
                     false
                 };
             let b_is_high = if channel_b_use { 
-                    app.get_out_gate_jack_is_high(channel_b_safe)
+                    App::<CHANNELS>::get_out_global_gate_jack_is_high(channel_b_safe)
                 } else {
                     false
                 };

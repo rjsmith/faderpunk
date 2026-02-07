@@ -12,11 +12,11 @@
 //! ## Combine Modes
 //! 
 //! The app has 5 "Combine Modes" for combining the CV from the two sampled jacks:
-//! 1. A + B: Sums the CV from the two jacks together,
-//! 2. A - B: Subtracts the CV of the second jack from the first,
-//! 3. Max: Outputs the higher of the two CVs,
-//! 4. Min: Outputs the lower of the two CVs,
-//! 5. Average: Outputs the average of the two CVs (if both channels active)
+//! 1. A + B + offset: Sums the CV from the two jacks together,
+//! 2. A - B + offset: Subtracts the CV of the second jack from the first,
+//! 3. Max + offset: Outputs the higher of the two CVs,
+//! 4. Min + offset: Outputs the lower of the two CVs,
+//! 5. Average + offset: Outputs the average of the two CVs (if both channels active)
 //! 
 //! 
 //! ## Hardware Mapping
@@ -24,10 +24,16 @@
 //! | Control | Function | + Shift | + Fn
 //! |---------|----------|---------|------|
 //! | Jack 1  | CV out   | N/A     | N/A  |
-//! | Fader 1 | N/A      | N/A     | N/A. | 
-//! | LED 1 Top | CV output level | CV output level | N/A
-//! | LED 1 Bottom | N/A | N/A | N/A
+//! | Fader 1 | Offset   | Divisor | N/A. | 
+//! | LED 1 Top | CV output level | Divisor | N/A
+//! | LED 1 Bottom | Offset (incl. divisor) | N/A | N/A
 //! | Fn 1    | Mute 1st added channel | Mute 2nd added channel | N/A |
+//! 
+//! The fader sets an CV offset which is applied to the combined CV output after the quantiser.
+//! By default, the offset is an effective range of -5V to + 5V, in steps of 1V. Sp if you are combining two v/o pitch signals, this
+//! shifts the post-quantized signal from -5 to +5 octaves. The bottom LED shows the level of the offset, with the midpoint (off) representing zero offset, fully lit (blue) representing +5V, and fully lit (red) representing -5V.
+//!
+//! Shift + Fader sets a divisor for the offset (in range 1 - 12) so you can use fractions of a volt as an offset. When the divisor is 12, and the CV is v/o pitch, the offset is in terms of semitones.
 //! 
 //! ## Usage Tips
 //! 
@@ -232,23 +238,51 @@ pub async fn run(app: &App<CHANNELS>,
     let main_fut = async {
        
        loop {
-            app.delay_millis(1).await;
+            app.delay_millis(1000).await;
 
             let channel_a_active = channel_a_enabled && !channel_a_mute_glob.get();
             let channel_b_active = channel_b_enabled && !channel_b_mute_glob.get();
+            // Prevent feedback loops by disabling the possibility to sample from the same channel that the app is outputting on
             let channel_a_use =  channel_a_active && app.start_channel != channel_a_safe;
             let channel_b_use = channel_b_active && app.start_channel != channel_b_safe;
+
+            // Get output jack config to find the configured output CV Range
+            let a_jack_config = if channel_a_use { 
+                        App::<CHANNELS>::get_out_jack_config(channel_a_safe).await
+                } else {
+                    None
+                };
+            let b_jack_config = if channel_b_use { 
+                        App::<CHANNELS>::get_out_jack_config(channel_b_safe).await
+                } else {
+                    None
+                };
+            match (a_jack_config, b_jack_config) {
+                (Some(a), Some(b)) => {
+                        let a_range = match a.range {
+                            Range::_0_10V => "_0_10V",
+                            Range::_0_5V => "_0_5V",
+                            Range::_Neg5_5V => "Neg5_5V",
+                        };
+                        let b_range = match b.range {
+                            Range::_0_10V => "_0_10V",
+                            Range::_0_5V => "_0_5V",
+                            Range::_Neg5_5V => "Neg5_5V",
+                        };
+                       info!("Channel A range: {}, Channel B range: {}", a_range, b_range);
+                },
+                _ => {
+                    info!("nada");
+                }
+            }       
+
             let mut a: i32 = if channel_a_use { 
-                   
-                        app.get_out_jack_value(channel_a_safe) as i32 
-                   
+                        App::<CHANNELS>::get_out_global_jack_value(channel_a_safe) as i32 
                 } else {
                     0
                 };
             let mut b:i32 = if channel_b_use { 
-                   
-                        app.get_out_jack_value(channel_b_safe) as i32
-                    
+                        App::<CHANNELS>::get_out_global_jack_value(channel_b_safe) as i32
                 } else {
                     0
                 };
