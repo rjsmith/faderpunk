@@ -97,6 +97,7 @@ impl InJack {
         Self { channel, range }
     }
 
+    /// Gets the current value of the input jack, normalised to a numeric range 0 - 4095 across the configured voltage Range.
     pub fn get_value(&self) -> u16 {
         let val = MAX_VALUES_ADC[self.channel].load(Ordering::Relaxed);
         match self.range {
@@ -736,11 +737,7 @@ impl<const N: usize> App<N> {
     pub fn get_out_global_gate_jack_is_high(global_chan: usize) -> bool {
         let chan = global_chan.clamp(0, GLOBAL_CHANNELS - 1);
         let gate = MAX_TRIGGERS_GPO[chan].load(Ordering::Relaxed);
-        if gate == 4 {
-            true
-        } else {
-            false
-        }
+        gate == 4 
     }
 
     /// Gets a possible copy of the stored config of a given global CV output jack channel, if any
@@ -748,7 +745,7 @@ impl<const N: usize> App<N> {
     pub async fn get_out_jack_config(global_chan: usize) -> Option<OutJack> {
         let chan = global_chan.clamp(0, GLOBAL_CHANNELS - 1);
         let jacks = get_out_jacks().await;
-        jacks[chan].clone()   
+        jacks[chan]  
     }
 
     /// Gets a possible copy of the stored config of a given global Gate output jack channel, if any
@@ -756,7 +753,7 @@ impl<const N: usize> App<N> {
     pub async fn get_gate_jack_config(global_chan: usize) -> Option<GateJack> {
         let chan = global_chan.clamp(0, GLOBAL_CHANNELS - 1);
         let jacks = get_gate_jacks().await;
-        jacks[chan].clone()   
+        jacks[chan]
     }
 
     /// Gets a possible copy of the stored config of a given global Gate input jack channel, if any
@@ -764,7 +761,7 @@ impl<const N: usize> App<N> {
     pub async fn get_in_jack_config(global_chan: usize) -> Option<InJack> {
         let chan = global_chan.clamp(0, GLOBAL_CHANNELS - 1);
         let jacks = get_in_jacks().await;
-        jacks[chan].clone()   
+        jacks[chan]  
     }
 
     pub async fn delay_millis(&self, millis: u64) {

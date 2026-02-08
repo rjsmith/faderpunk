@@ -1,13 +1,17 @@
 //! # CV Combine app
 //! 
+//! TODO:
+//! * MIDI
+//! * Scene saving and loading
+//! 
 //! Precision CV adder / combiner / quantizer of one or two other output variable CV jacks belonging to other apps
 //! 
 //! This app is able to sum the output voltages of up to two other specified output jacks belonging to other apps in the same layout.
 //! It simulates the behaviour of Eurorack precision adder / CV math modules.
 //! 
-//! The app combines the one or two sampled CV output jacks together, optionally quantises the sum, then re-scales the output signal to the required output voltage range.
+//! The app combines the one or two sampled CV output jacks together, optionally quantises the sum, optionally applies a voltage offset, then re-scales the output signal to the required output voltage range.
 //! 
-//! If the summed CV from the two sampled output jacks exceed the min and max of the output Range, the summed CV will be hardclipped to the min or max of the Range.
+//! If the final voltage value exceed the min and max of the output Range, the summed CV will be hardclipped to the min or max of the Range.
 //! 
 //! ## Combine Modes
 //! 
@@ -27,27 +31,41 @@
 //! | Fader 1 | Offset   | Divisor | N/A. | 
 //! | LED 1 Top | CV output level | Divisor | N/A
 //! | LED 1 Bottom | Offset (incl. divisor) | N/A | N/A
-//! | Fn 1    | Mute 1st added channel | Mute 2nd added channel | N/A |
+//! | Fn 1    | Short press: Toggle Channel A, Long press: Toggle Offset | Short press: Toggle Channel B| N/A |
 //! 
 //! The fader sets an CV offset which is applied to the combined CV output after the quantiser.
-//! By default, the offset is an effective range of -5V to + 5V, in steps of 1V. Sp if you are combining two v/o pitch signals, this
+//! By default, the offset is an effective range of -5V to + 5V, in steps of 1V. So if you are combining two v/o pitch signals, this
 //! shifts the post-quantized signal from -5 to +5 octaves. The bottom LED shows the level of the offset, with the midpoint (off) representing zero offset, fully lit (blue) representing +5V, and fully lit (red) representing -5V.
 //!
-//! Shift + Fader sets a divisor for the offset (in range 1 - 12) so you can use fractions of a volt as an offset. When the divisor is 12, and the CV is v/o pitch, the offset is in terms of semitones.
+//! Shift + Fader sets a divisor for the offset (in range 1 at the bottom to 12 at the top) so you can use fractions of a volt as an offset. When the divisor is 12, and the CV is v/o pitch, the offset is in terms of semitones.
+//! 
+//! The offset can be toggled on and off by Shift + long-pressing the button.
 //! 
 //! ## Usage Tips
 //! 
 //! ### Steevio Sequencing
 //! Replicate the magic sequencing techniques of the Welsh modular musician, Steevio!:
 //! 1. Set up a "Sequencer" 8-channel app with two note patterns with different lengths and tempo (e.g. 5 and 7 steps).
-//! 2. Place an "Combine" app in "CV Mode" somewhere else on the layout, configuring its "1st" and "2nd" Jack channels to the first two "CV Output" jacks of the Sequencer.
-//! 3. Set the Combine's output range to 0-10V (to match the fixed 0-10V output range of the Sequencer app).
+//! 2. Place an "CV Combine" app somewhere else on the layout, configuring its "A" and "B" Jack channels to the first two "CV Output" jacks of the Sequencer (channels 1 & 3 on the Sequencer).
+//! 3. Set the Combine's output range to 0-10V, turn on Quantize output (to match the fixed 0-10V output range of the Sequencer app).
 //! 
-//!
-
-
+//! ### Muting 
+//! Mute and unmute the CV Combine's "A" and "B" channels to bring in either pattern
+//! 
+//! ### Combine Modes
+//! Try out the different Combine Modes for different variations in how the two patterns interact. 
+//! 
+//! ### Octave and semitone shifting
+//! Add some octave shifts (+5 to -5 octave offsets) by moving the bipolar offset fader (no offset in the middle of its range)
+//! Hold Shift and experiment with different offset divisors. 
+//! With a divisor of 12 (fader at top of its range), the offset is in semitones
+//! 
+//! ### Mix LFOs and Control CVs
+//! Configure the CV Combine to mix an LFO and a Control app together, or two LFOs set to different frequencies, for more complex modulation patterns.
+//! (Disable the quantizer in this case to preserve the smoothness of the LFO signal)
+//! 
 use embassy_futures::{
-    join::join3, select::{select, select3}
+    join::{join5}, select::{select, select3}
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use heapless::Vec;
@@ -55,6 +73,7 @@ use libfp::{
     APP_MAX_PARAMS, AppIcon, Brightness, Color, Config, GLOBAL_CHANNELS,     latch::LatchLayer,
 Param, Range, Value, ext::FromValue};
 
+use libm::roundf;
 use serde::{Deserialize, Serialize};
 
 use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore };
@@ -64,6 +83,10 @@ use defmt::info;
 
 pub const CHANNELS: usize = 1;
 pub const PARAMS: usize = 8;
+
+const _5V:i16 = 2047;
+const _10V:i16 = 4095;
+const V_PER_OCTAVE:f32 = 409.5;
 
 // App configuration visible to the configurator
 pub static CONFIG: Config<PARAMS> = Config::new(
@@ -162,10 +185,25 @@ impl AppParams for Params {
     }
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct Storage {
     channel_a_mute_saved: bool,
     channel_b_mute_saved: bool,
+    offset_enabled_saved:bool,
+    offset_voltage_saved: u16,
+    offset_divisor_saved: u16,
+}
+
+impl Default for Storage {
+    fn default() -> Self {
+        Self {
+            channel_a_mute_saved: false,
+            channel_b_mute_saved: false,
+            offset_enabled_saved: true,
+            offset_voltage_saved: 0,
+            offset_divisor_saved: 0,
+        }
+    }
 }
 
 impl AppStorage for Storage {}
@@ -238,15 +276,17 @@ pub async fn run(app: &App<CHANNELS>,
     let main_fut = async {
        
        loop {
-            app.delay_millis(1000).await;
+            app.delay_millis(1).await;
 
             let channel_a_active = channel_a_enabled && !channel_a_mute_glob.get();
             let channel_b_active = channel_b_enabled && !channel_b_mute_glob.get();
+
             // Prevent feedback loops by disabling the possibility to sample from the same channel that the app is outputting on
             let channel_a_use =  channel_a_active && app.start_channel != channel_a_safe;
             let channel_b_use = channel_b_active && app.start_channel != channel_b_safe;
 
             // Get output jack config to find the configured output CV Range
+            // TODO: Take this out of this fast loop
             let a_jack_config = if channel_a_use { 
                         App::<CHANNELS>::get_out_jack_config(channel_a_safe).await
                 } else {
@@ -257,83 +297,148 @@ pub async fn run(app: &App<CHANNELS>,
                 } else {
                     None
                 };
-            match (a_jack_config, b_jack_config) {
-                (Some(a), Some(b)) => {
-                        let a_range = match a.range {
-                            Range::_0_10V => "_0_10V",
-                            Range::_0_5V => "_0_5V",
-                            Range::_Neg5_5V => "Neg5_5V",
-                        };
-                        let b_range = match b.range {
-                            Range::_0_10V => "_0_10V",
-                            Range::_0_5V => "_0_5V",
-                            Range::_Neg5_5V => "Neg5_5V",
-                        };
-                       info!("Channel A range: {}, Channel B range: {}", a_range, b_range);
-                },
-                _ => {
-                    info!("nada");
+
+            // Get sampled jack values and transform to voltage values according to their individual configured CV Range. 
+            // If channel not active, treat as zero. If jack config not found (e.g. app unplugged), also treat as zero.
+            let a_in_v: i16 = if channel_a_use {
+                match a_jack_config {
+                    Some(config) => { 
+                        let raw = App::<CHANNELS>::get_out_global_jack_value(channel_a_safe);
+                        config.range.jack_value_to_voltage_value(raw)
+                    },
+                    None => 0
                 }
-            }       
-
-            let mut a: i32 = if channel_a_use { 
-                        App::<CHANNELS>::get_out_global_jack_value(channel_a_safe) as i32 
-                } else {
-                    0
-                };
-            let mut b:i32 = if channel_b_use { 
-                        App::<CHANNELS>::get_out_global_jack_value(channel_b_safe) as i32
-                } else {
-                    0
-                };
-
-            let out:i32 = if combine_mode == 0 {
-                a + b    
+            } else {
+                0
+            };
+            let b_in_v:i16 = if channel_b_use {
+                    match b_jack_config {
+                        Some(config) => { 
+                        let raw = App::<CHANNELS>::get_out_global_jack_value(channel_b_safe);
+                        config.range.jack_value_to_voltage_value(raw)
+                        },
+                        None => 0
+                    }
+            } else {
+                0
+            };
+            let a_plus_5v = a_in_v + _5V;
+            let b_plus_5v = b_in_v + _5V;    
+            
+            let mut out_v:i16 = if combine_mode == 0 {
+                // Add
+                a_plus_5v + b_plus_5v - _10V    
             } else if combine_mode == 1 {
-                a - b    
+                // Subtract
+                a_plus_5v - b_plus_5v - _10V    
             } else if combine_mode == 2 {
                 // Max
-                if a > b { a } else { b }
+                if a_plus_5v > b_plus_5v { a_in_v } else { b_in_v }
             } else if combine_mode == 3 {
-                // If channel a or b are disabled, effectively remove them from the calculation,
-                // making sure that out = zero if BOTH are disabled
-                if !channel_a_use { a = 4095; } 
-                if !channel_b_use { b = 4095; }
-                if !channel_a_use && !channel_b_use {
-                    a = 0;
-                    b = 0;
-                };
-                if a < b { a } else { b }
+                // Min
+                if channel_a_use && channel_b_use {
+                    if a_plus_5v < b_plus_5v { a_in_v } else { b_in_v }
+                } else if channel_a_use && !channel_b_use {
+                    a_in_v
+                } else if !channel_a_use && channel_b_use {
+                    b_in_v
+                } else {
+                    0
+                }
             } else if combine_mode == 4 {
+                // Average
                 // If both channels active, output their average, else either a or b only
                 if channel_a_use && channel_b_use {
-                    (a + b) / 2
+                    ((a_plus_5v + b_plus_5v) / 2) - _5V
                 } else if channel_a_use && !channel_b_use {
-                    a
+                    a_in_v
                 } else {
-                    b
+                    b_in_v
                 }
             } else { 
                 0 
             };
 
-            // Hard clip summed values
-            let out_safe: u16 = (out.clamp(0, 4095)) as u16;
 
-            // Output CV
-            if quantize {
-                let out_pitch = quantizer.get_quantized_note(out_safe).await;
-                let out = out_pitch.as_counts(range);
-                output.set_value(out);
-                leds.set(0, Led::Top, led_color, Brightness::Custom((out / 16) as u8));
+            // Optionally add additional octave or divided semitone offset
+            let (offset_enabled, offset_voltage_saved, offset_divisor_saved) = storage.query(|s| (s.offset_enabled_saved, s.offset_voltage_saved, s.offset_divisor_saved));
+            if offset_enabled {
+                let offset_divisor = if offset_divisor_saved > 0 { offset_divisor_saved } else { 1 };
+                let offset_v = calculate_offset_voltage(offset_voltage_saved, offset_divisor);
+                out_v += offset_v;
+                if offset_v > 0 {
+                    let pos = (offset_v / 8).clamp(0, 255) as u8;
+                    leds.set(0, Led::Bottom, Color::Blue, Brightness::Custom(pos));
+                } else if offset_v < 0 {
+                    let neg = ((offset_v.abs()) / 8).clamp(0, 255) as u8;
+                    leds.set(0, Led::Bottom, Color::Rose, Brightness::Custom(neg));
+                } else {
+                    leds.unset(0, Led::Bottom);
+                }           
             } else {
-                output.set_value(out_safe);
-                leds.set(0, Led::Top, led_color, Brightness::Custom((out_safe / 16) as u8));
+                leds.unset(0, Led::Bottom);
             }
 
-            // info!("Summed out: {}, channel A enabled: {}[{}], channel B enabled: {}[{}]", out_safe, channel_a_enabled, channel_a_safe, channel_b_enabled, channel_b_safe);
+            // Clamp to output voltage range, negative voltages clamped to 0V if output range does not support negative voltages
+            out_v = out_v.clamp(-_5V, _10V);
+            let out_safe = match range {
+                Range::_0_10V => out_v.clamp(0, _10V) as u16,
+                Range::_0_5V => out_v.clamp(0, _5V) as u16 * 2,
+                Range::_Neg5_5V => (out_v.clamp(-_5V, _5V) + _5V) as u16,
+            };
+
+            // Optionally quantize output CV to global quantizer scale
+            let out: u16 = if quantize {
+                let out_pitch = quantizer.get_quantized_note(out_safe).await;
+                out_pitch.as_counts(range)
+            } else {
+                out_safe
+            };
+
+            output.set_value(out);
+            leds.set(0, Led::Top, led_color, Brightness::Custom((out / 16) as u8));
+       
 
        }
+    };
+
+    // Returns offset voltage in range -2047 to  + 2047 (ie. -5V to +5V) 
+    fn calculate_offset_voltage(offset_voltage_saved: u16, offset_divisor: u16) -> i16 {
+        // Map divisor saved value to 1 - 12
+        let divisor_scale: i16 = ((11.0 / 4095.0) * offset_divisor as f32) as i16 + 1; // in range 1 - 12
+        let offset_scaled = (offset_voltage_saved as f32 / 409.5)  - 5.0; // in range -5.0 to +5.0V
+        if divisor_scale == 1 {
+            (roundf(offset_scaled)  * V_PER_OCTAVE) as i16 // whole volt (ie. octave) steps
+        } else {
+            roundf(offset_scaled * V_PER_OCTAVE) as i16 / divisor_scale
+        }       
+    }
+
+    let faders_fut = async {
+        let mut latch = app.make_latch(fader.get_value());
+        loop {
+            fader.wait_for_change().await;
+
+            let latch_layer = glob_latch_layer.get();
+
+            let target_value = match latch_layer {
+                LatchLayer::Main => storage.query(|s| s.offset_voltage_saved),
+                LatchLayer::Alt => storage.query(|s| s.offset_divisor_saved),
+                LatchLayer::Third => 0,
+            };
+
+            if let Some(new_value) = latch.update(fader.get_value(), latch_layer, target_value) {
+                match latch_layer {
+                    LatchLayer::Main => {
+                        storage.modify_and_save(|s| s.offset_voltage_saved = new_value);
+                    }
+                    LatchLayer::Alt => {
+                        storage.modify_and_save(|s| s.offset_divisor_saved = new_value);
+                    }
+                    LatchLayer::Third => ()
+                }
+            }
+        };
     };
 
     let btn_fut = async {
@@ -367,6 +472,22 @@ pub async fn run(app: &App<CHANNELS>,
         };       
     };
 
+    let long_press_fut = async {
+        //long press
+
+        loop {
+            let (_, is_shift_pressed) = buttons.wait_for_any_long_press().await;
+
+            if !is_shift_pressed {
+                // Toggle offset on/off
+                storage.modify_and_save(|s| {
+                    s.offset_enabled_saved = !s.offset_enabled_saved;
+                    s.offset_enabled_saved
+                });
+            } 
+        }
+    };
+
     let shift_fut = async {
         loop {
             app.delay_millis(1).await;
@@ -393,6 +514,6 @@ pub async fn run(app: &App<CHANNELS>,
         };
     };
 
-    join3(main_fut, btn_fut, shift_fut).await;
+    join5(main_fut, faders_fut, btn_fut, long_press_fut, shift_fut).await;
 
 }
