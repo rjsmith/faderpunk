@@ -21,6 +21,7 @@ use libfp::{
 
 use crate::{
     events::{EventPubSubChannel, InputEvent},
+    state::{get_gate_jacks, get_in_jacks, get_out_jacks, update_state},
     tasks::{
         buttons::{is_channel_button_pressed, is_shift_button_pressed},
         clock::{ClockSubscriber, CLOCK_PUBSUB},
@@ -32,8 +33,6 @@ use crate::{
         midi::{AppMidiSender, MidiEventSource, MidiMsg, MidiPubSubChannel, MidiPubSubSubscriber},
     },
     QUANTIZER,
-    state::{get_in_jacks, get_out_jacks, get_gate_jacks, update_state},
-
 };
 
 pub use crate::{
@@ -676,10 +675,11 @@ impl<const N: usize> App<N> {
         let global_chan = self.start_channel + chan;
         let jack = InJack::new(global_chan, range);
         // Register new jack in global runtime state
-        update_state(|s| {       
+        update_state(|s| {
             s.in_jacks[global_chan] = Some(jack);
             true
-        }).await;
+        })
+        .await;
 
         jack
     }
@@ -696,10 +696,11 @@ impl<const N: usize> App<N> {
         let global_chan = self.start_channel + chan;
         let jack = OutJack::new(global_chan, range);
         // Register new jack in global runtime state
-        update_state(|s| {       
+        update_state(|s| {
             s.out_jacks[global_chan] = Some(jack);
             true
-        }).await;
+        })
+        .await;
 
         jack
     }
@@ -712,10 +713,11 @@ impl<const N: usize> App<N> {
         let global_chan = self.start_channel + chan;
         let jack = GateJack::new(global_chan);
         // Register new jack in global runtime state
-        update_state(|s| {       
+        update_state(|s| {
             s.gate_jacks[chan] = Some(jack);
             true
-        }).await;
+        })
+        .await;
 
         jack
     }
@@ -737,7 +739,7 @@ impl<const N: usize> App<N> {
     pub fn get_out_global_gate_jack_is_high(global_chan: usize) -> bool {
         let chan = global_chan.clamp(0, GLOBAL_CHANNELS - 1);
         let gate = MAX_TRIGGERS_GPO[chan].load(Ordering::Relaxed);
-        gate == 4 
+        gate == 4
     }
 
     /// Gets a possible copy of the stored config of a given global CV output jack channel, if any
@@ -745,7 +747,7 @@ impl<const N: usize> App<N> {
     pub async fn get_out_jack_config(global_chan: usize) -> Option<OutJack> {
         let chan = global_chan.clamp(0, GLOBAL_CHANNELS - 1);
         let jacks = get_out_jacks().await;
-        jacks[chan]  
+        jacks[chan]
     }
 
     /// Gets a possible copy of the stored config of a given global Gate output jack channel, if any
@@ -761,7 +763,7 @@ impl<const N: usize> App<N> {
     pub async fn get_in_jack_config(global_chan: usize) -> Option<InJack> {
         let chan = global_chan.clamp(0, GLOBAL_CHANNELS - 1);
         let jacks = get_in_jacks().await;
-        jacks[chan]  
+        jacks[chan]
     }
 
     pub async fn delay_millis(&self, millis: u64) {

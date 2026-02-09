@@ -1,10 +1,8 @@
 //! # CV Combine app
 //! 
-//! TODO:
-//! * MIDI
-//! * Scene saving and loading
-//! 
 //! Precision CV adder / combiner / quantizer of one or two other output variable CV jacks belonging to other apps
+//!
+//! Created by Richard Smith (@rjsmith on GitHub) in February 2026. 
 //! 
 //! This app is able to sum the output voltages of up to two other specified output jacks belonging to other apps in the same layout.
 //! It simulates the behaviour of Eurorack precision adder / CV math modules.
@@ -12,6 +10,8 @@
 //! The app combines the one or two sampled CV output jacks together, optionally quantises the sum, optionally applies a voltage offset, then re-scales the output signal to the required output voltage range.
 //! 
 //! If the final voltage value exceed the min and max of the output Range, the summed CV will be hardclipped to the min or max of the Range.
+//! 
+//! This app does not output any MIDI events.
 //! 
 //! ## Combine Modes
 //! 
@@ -21,7 +21,6 @@
 //! 3. Max + offset: Outputs the higher of the two CVs,
 //! 4. Min + offset: Outputs the lower of the two CVs,
 //! 5. Average + offset: Outputs the average of the two CVs (if both channels active)
-//! 
 //! 
 //! ## Hardware Mapping
 //! 
@@ -40,6 +39,9 @@
 //! Shift + Fader sets a divisor for the offset (in range 1 at the bottom to 12 at the top) so you can use fractions of a volt as an offset. When the divisor is 12, and the CV is v/o pitch, the offset is in terms of semitones.
 //! 
 //! The offset can be toggled on and off by Shift + long-pressing the button.
+//! 
+//! ## Scene Storage
+//! The app saves the mute state of the two channels and the offset voltage and divisor in scenes.
 //! 
 //! ## Usage Tips
 //! 
@@ -64,6 +66,10 @@
 //! Configure the CV Combine to mix an LFO and a Control app together, or two LFOs set to different frequencies, for more complex modulation patterns.
 //! (Disable the quantizer in this case to preserve the smoothness of the LFO signal)
 //! 
+//! ### Scene Switching
+//! Save different scene settings for a CV Combine app with different offsets or channel mutes, then switch betwen them during a performance.
+//! If you also change the scene settings of the upstream CV generating apps, you can get some really interesting switched melodies and modulation.
+//! 
 use embassy_futures::{
     join::{join5}, select::{select, select3}
 };
@@ -76,10 +82,7 @@ Param, Range, Value, ext::FromValue};
 use libm::roundf;
 use serde::{Deserialize, Serialize};
 
-use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore };
-
-// TODO: Remove from final code
-use defmt::info;
+use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore, SceneEvent };
 
 pub const CHANNELS: usize = 1;
 pub const PARAMS: usize = 8;
@@ -362,22 +365,33 @@ pub async fn run(app: &App<CHANNELS>,
 
             // Optionally add additional octave or divided semitone offset
             let (offset_enabled, offset_voltage_saved, offset_divisor_saved) = storage.query(|s| (s.offset_enabled_saved, s.offset_voltage_saved, s.offset_divisor_saved));
+            let mut offset_v = 0;
+            let mut offset_divisor = 1;
             if offset_enabled {
-                let offset_divisor = if offset_divisor_saved > 0 { offset_divisor_saved } else { 1 };
-                let offset_v = calculate_offset_voltage(offset_voltage_saved, offset_divisor);
+                offset_divisor = if offset_divisor_saved > 0 { offset_divisor_saved } else { 1 };
+                offset_v = calculate_offset_voltage(offset_voltage_saved, offset_divisor);
                 out_v += offset_v;
-                if offset_v > 0 {
-                    let pos = (offset_v / 8).clamp(0, 255) as u8;
-                    leds.set(0, Led::Bottom, Color::Blue, Brightness::Custom(pos));
-                } else if offset_v < 0 {
-                    let neg = ((offset_v.abs()) / 8).clamp(0, 255) as u8;
-                    leds.set(0, Led::Bottom, Color::Rose, Brightness::Custom(neg));
-                } else {
-                    leds.unset(0, Led::Bottom);
-                }           
-            } else {
-                leds.unset(0, Led::Bottom);
             }
+
+            // Update bottom LED to either show offset or divisor level
+            match glob_latch_layer.get() {
+                LatchLayer::Main => {   
+                    if offset_enabled && offset_v > 0 {
+                        let pos: u8 = (offset_v / 8).clamp(0, 255) as u8;
+                        leds.set(0, Led::Bottom, Color::Blue, Brightness::Custom(pos));
+                    } else if offset_enabled && offset_v < 0 {
+                        let neg = ((offset_v.abs()) / 8).clamp(0, 255) as u8;
+                        leds.set(0, Led::Bottom, Color::Rose, Brightness::Custom(neg));
+                    } else {
+                        leds.unset(0, Led::Bottom);
+                    }           
+                }
+                LatchLayer::Alt => {
+                    let divisor: u8 = (((11.0 / 4095.0) * offset_divisor as f32) as i16 + 1).clamp(1, 12) as u8;
+                    leds.set(0, Led::Bottom, Color::Green, Brightness::Custom(21 * divisor)); // 255/12 is approx 21
+                }
+                _ => {}
+            };
 
             // Clamp to output voltage range, negative voltages clamped to 0V if output range does not support negative voltages
             out_v = out_v.clamp(-_5V, _10V);
@@ -399,18 +413,37 @@ pub async fn run(app: &App<CHANNELS>,
             leds.set(0, Led::Top, led_color, Brightness::Custom((out / 16) as u8));
        
 
+            // Change state of button when shift is pressed or released to show correct active state of channels A & B
+            glob_latch_layer.set(LatchLayer::from(buttons.is_shift_pressed()));
+            if !buttons.is_shift_pressed() {
+                let muted = storage.query(|s| s.channel_a_mute_saved);
+                if muted {
+                    leds.unset(0, Led::Button);
+                } else {
+                    leds.set(0, Led::Button, led_color, Brightness::Mid);
+                }
+            } else {
+                let muted = storage.query(|s| s.channel_b_mute_saved);
+                if muted {
+                    leds.unset(0, Led::Button);
+                } else {
+                    leds.set(0, Led::Button, led_color, Brightness::Mid);
+                }
+            }
+
        }
     };
 
     // Returns offset voltage in range -2047 to  + 2047 (ie. -5V to +5V) 
     fn calculate_offset_voltage(offset_voltage_saved: u16, offset_divisor: u16) -> i16 {
         // Map divisor saved value to 1 - 12
-        let divisor_scale: i16 = ((11.0 / 4095.0) * offset_divisor as f32) as i16 + 1; // in range 1 - 12
-        let offset_scaled = (offset_voltage_saved as f32 / 409.5)  - 5.0; // in range -5.0 to +5.0V
-        if divisor_scale == 1 {
-            (roundf(offset_scaled)  * V_PER_OCTAVE) as i16 // whole volt (ie. octave) steps
+        let divisor: i16 = (((11.0 / 4095.0) * offset_divisor as f32) as i16 + 1).clamp(1, 12);
+        let offset = (offset_voltage_saved as f32 / 409.5)  - 5.0; // in range -5.0 to +5.0V (-2047 to + 2047)
+        if divisor == 1 {
+            (roundf(offset)  * V_PER_OCTAVE) as i16 // whole volt (ie. octave) steps
         } else {
-            roundf(offset_scaled * V_PER_OCTAVE) as i16 / divisor_scale
+            // Continuous offset, quantized by divisor
+            roundf(offset * V_PER_OCTAVE) as i16 / divisor
         }       
     }
 
@@ -488,32 +521,22 @@ pub async fn run(app: &App<CHANNELS>,
         }
     };
 
-    let shift_fut = async {
+    let scene_handler = async {
         loop {
-            app.delay_millis(1).await;
-
-            glob_latch_layer.set(LatchLayer::from(buttons.is_shift_pressed()));
-
-            // Change state of button when shift is pressed or released to show correct active state of channels A & B
-            if !buttons.is_shift_pressed() {
-                let muted = storage.query(|s| s.channel_a_mute_saved);
-                if muted {
-                    leds.unset(0, Led::Button);
-                } else {
-                    leds.set(0, Led::Button, led_color, Brightness::Mid);
+            match app.wait_for_scene_event().await {
+                SceneEvent::LoadScene(scene) => {
+                    storage.load_from_scene(scene).await;
+                    channel_a_mute_glob.set(storage.query(|s| s.channel_a_mute_saved));
+                    channel_b_mute_glob.set(storage.query(|s| s.channel_b_mute_saved));
                 }
-            } else {
-                let muted = storage.query(|s| s.channel_b_mute_saved);
-                if muted {
-                    leds.unset(0, Led::Button);
-                } else {
-                    leds.set(0, Led::Button, led_color, Brightness::Mid);
+
+                SceneEvent::SaveScene(scene) => {
+                    storage.save_to_scene(scene).await;
                 }
             }
-            
-        };
+        }
     };
 
-    join5(main_fut, faders_fut, btn_fut, long_press_fut, shift_fut).await;
+    join5(main_fut, faders_fut, btn_fut, long_press_fut, scene_handler).await;
 
 }
