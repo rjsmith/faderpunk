@@ -20,4 +20,6 @@ register_apps!(
     19 => panner,
     22 => lfo_plus,
     43 => soma,
+    44 => cvcombine,
+    45 => gatecombine,
 );
