@@ -19,5 +19,8 @@ register_apps!(
     18 => clk_div,
     19 => panner,
     22 => lfo_plus,
+    43 => soma,
+    44 => cvcombine,
+    45 => gatecombine,
     46 => fp_grids,
 );
