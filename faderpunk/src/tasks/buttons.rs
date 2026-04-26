@@ -8,14 +8,10 @@ use embassy_rp::peripherals::{
 };
 use embassy_rp::Peri;
 use embassy_time::Timer;
-use libfp::Color;
 use portable_atomic::{AtomicBool, Ordering};
 
-use crate::app::Led;
 use crate::events::{EventPubSubPublisher, InputEvent, EVENT_PUBSUB};
 use crate::tasks::clock::{TransportCmd, TRANSPORT_CMD_CHANNEL};
-
-use super::leds::{set_led_overlay_mode, LedMode};
 
 const LONG_PRESS_DURATION_MS: u64 = 500;
 
@@ -92,17 +88,14 @@ async fn process_button(i: usize, mut button: Input<'_>, event_publisher: &Event
             {
                 Either::First(_) => {
                     // Short press - Load scene
-                    set_led_overlay_mode(i, Led::Button, LedMode::Flash(Color::Green, Some(2)))
-                        .await;
                     // TODO: experiment with using publish_immediate everywhere to prevent hanging
                     // subscribers
                     event_publisher
-                        .publish(InputEvent::LoadScene(i as u8))
+                        .publish(InputEvent::LoadSceneFromButton(i as u8))
                         .await;
                 }
                 Either::Second(_) => {
                     // Long press - Save scene
-                    set_led_overlay_mode(i, Led::Button, LedMode::Flash(Color::Red, Some(3))).await;
                     event_publisher
                         .publish(InputEvent::SaveScene(i as u8))
                         .await;
@@ -144,7 +137,17 @@ async fn process_button(i: usize, mut button: Input<'_>, event_publisher: &Event
 }
 
 // Process modifier button using debounce and state synchronization logic
-async fn process_modifier_button(i: usize, mut button: Input<'_>) {
+async fn process_modifier_button(
+    i: usize,
+    mut button: Input<'_>,
+    event_publisher: &EventPubSubPublisher,
+) {
+    let (down_event, up_event) = match i {
+        16 => (InputEvent::SceneButtonDown, InputEvent::SceneButtonUp),
+        17 => (InputEvent::ShiftButtonDown, InputEvent::ShiftButtonUp),
+        _ => unreachable!("only called for modifier buttons 16 and 17"),
+    };
+
     loop {
         if button.is_low() {
             BUTTON_PRESSED[i].store(true, Ordering::Relaxed);
@@ -156,6 +159,7 @@ async fn process_modifier_button(i: usize, mut button: Input<'_>) {
             }
 
             BUTTON_PRESSED[i].store(false, Ordering::Relaxed);
+            event_publisher.publish(up_event.clone()).await;
         }
 
         button.wait_for_falling_edge().await;
@@ -169,8 +173,8 @@ async fn process_modifier_button(i: usize, mut button: Input<'_>) {
         if i == 17 && BUTTON_PRESSED[16].load(Ordering::Relaxed) {
             TRANSPORT_CMD_CHANNEL.send(TransportCmd::Toggle).await;
         } else {
-            // Do not register the button press
             BUTTON_PRESSED[i].store(true, Ordering::Relaxed);
+            event_publisher.publish(down_event.clone()).await;
         }
 
         button.wait_for_rising_edge().await;
@@ -181,6 +185,7 @@ async fn process_modifier_button(i: usize, mut button: Input<'_>) {
         }
 
         BUTTON_PRESSED[i].store(false, Ordering::Relaxed);
+        event_publisher.publish(up_event.clone()).await;
 
         Timer::after_millis(1).await;
     }
@@ -209,9 +214,9 @@ async fn run_buttons(buttons: Buttons) {
     ];
 
     let modifier_futs = [
-        process_modifier_button(16, Input::new(buttons.16, Pull::Up)),
+        process_modifier_button(16, Input::new(buttons.16, Pull::Up), &event_publisher),
         // Button 17 is pulled up in hardware
-        process_modifier_button(17, Input::new(buttons.17, Pull::None)),
+        process_modifier_button(17, Input::new(buttons.17, Pull::None), &event_publisher),
     ];
 
     join(join_array(button_futs), join_array(modifier_futs)).await;

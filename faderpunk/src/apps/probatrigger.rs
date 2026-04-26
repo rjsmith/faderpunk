@@ -18,7 +18,7 @@ use crate::app::{
 pub const CHANNELS: usize = 1;
 pub const PARAMS: usize = 5;
 
-const LED_BRIGHTNESS: Brightness = Brightness::High;
+const LED_BRIGHTNESS: Brightness = Brightness::Mid;
 
 pub static CONFIG: Config<PARAMS> = Config::new(
     "Random Triggers",
@@ -56,18 +56,6 @@ pub struct Params {
     midi_out: MidiOut,
     gatel: i32,
     color: Color,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            midi_channel: MidiChannel::default(),
-            midi_note: MidiNote::from(32),
-            midi_out: MidiOut([false, false, false]),
-            gatel: 50,
-            color: Color::Cyan,
-        }
-    }
 }
 
 impl AppParams for Params {
@@ -115,7 +103,13 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id, Params {
+        midi_channel: MidiChannel::default(),
+        midi_note: MidiNote::from(32),
+        midi_out: MidiOut([false, false, false]),
+        gatel: 50,
+        color: Color::Cyan,
+    });
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -158,10 +152,11 @@ pub async fn run(
     let buttons = app.use_buttons();
     let leds = app.use_leds();
 
-    let midi = app.use_midi_output(midi_out, midi_chan);
+    let midi = app.use_midi_output(midi_out, midi_chan, false);
 
     let glob_muted = app.make_global(false);
     let div_glob = app.make_global(6);
+    let prob_glob = app.make_global(4095_u16);
     let glob_latch_layer = app.make_global(LatchLayer::Main);
 
     let jack = app.make_gate_jack(0, 4095).await;
@@ -170,9 +165,10 @@ pub async fn run(
 
     let mut rndval = die.roll();
 
-    let (res, mute) = storage.query(|s| (s.fader_saved, s.mute_saved));
+    let (res, mute, prob) = storage.query(|s| (s.fader_saved, s.mute_saved, s.prob_saved));
 
     glob_muted.set(mute);
+    prob_glob.set(prob);
     div_glob.set(resolution[res as usize / 345]);
     if mute {
         leds.unset(0, Led::Button);
@@ -184,6 +180,8 @@ pub async fn run(
 
     let fut1 = async {
         let mut note_on = false;
+        let mut cached_div = div_glob.get();
+        let mut cached_gate_step = (cached_div * gatel / 100).clamp(1, cached_div - 1);
 
         loop {
             match clock.wait_for_event(ClockDivision::_1).await {
@@ -199,11 +197,15 @@ pub async fn run(
                 }
                 ClockEvent::Tick => {
                     let muted = glob_muted.get();
-                    let val = storage.query(|s| s.prob_saved);
                     let div = div_glob.get();
+                    if div != cached_div {
+                        cached_div = div;
+                        cached_gate_step = (cached_div * gatel / 100).clamp(1, cached_div - 1);
+                    }
+                    let val = prob_glob.get();
                     let clkn = ticks() as u32;
 
-                    if clkn.is_multiple_of(div) {
+                    if clkn.is_multiple_of(cached_div) {
                         if curve.at(val) >= rndval && !muted {
                             jack.set_high().await;
                             leds.set(0, Led::Top, led_color, LED_BRIGHTNESS);
@@ -223,7 +225,7 @@ pub async fn run(
                         rndval = die.roll();
                     }
 
-                    if clkn % div == (div * gatel / 100).clamp(1, div - 1) {
+                    if clkn % cached_div == cached_gate_step {
                         if note_on {
                             midi.send_note_off(note).await;
                             leds.set(0, Led::Top, led_color, Brightness::Off);
@@ -278,6 +280,7 @@ pub async fn run(
                         storage.modify_and_save(|s| s.fader_saved = new_value);
                     }
                     LatchLayer::Main => {
+                        prob_glob.set(new_value);
                         storage.modify_and_save(|s| s.prob_saved = new_value);
                     }
                     LatchLayer::Third => {}
@@ -291,10 +294,11 @@ pub async fn run(
             match app.wait_for_scene_event().await {
                 SceneEvent::LoadScene(scene) => {
                     storage.load_from_scene(scene).await;
-                    let (res, mute, _att) =
+                    let (res, mute, prob) =
                         storage.query(|s| (s.fader_saved, s.mute_saved, s.prob_saved));
 
                     glob_muted.set(mute);
+                    prob_glob.set(prob);
                     div_glob.set(resolution[res as usize / 345]);
                     if mute {
                         leds.unset(0, Led::Button);

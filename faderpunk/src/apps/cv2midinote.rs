@@ -25,7 +25,10 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     Color::Orange,
     AppIcon::NoteBox,
 )
-.add_param(Param::bool { name: "Bipolar" })
+.add_param(Param::Range {
+    name: "Range",
+    variants: &[Range::_0_10V, Range::_Neg5_5V],
+})
 .add_param(Param::MidiChannel {
     name: "MIDI Channel",
 })
@@ -50,23 +53,11 @@ pub static CONFIG: Config<PARAMS> = Config::new(
 .add_param(Param::MidiOut);
 
 pub struct Params {
-    bipolar: bool,
+    range: Range,
     midi_channel: MidiChannel,
     midi_out: MidiOut,
     delay: i32,
     color: Color,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            bipolar: false,
-            midi_channel: MidiChannel::default(),
-            midi_out: MidiOut::default(),
-            delay: 0,
-            color: Color::Orange,
-        }
-    }
 }
 
 impl AppParams for Params {
@@ -75,7 +66,7 @@ impl AppParams for Params {
             return None;
         }
         Some(Self {
-            bipolar: bool::from_value(values[0]),
+            range: Range::from_value(values[0]),
             midi_channel: MidiChannel::from_value(values[1]),
             delay: i32::from_value(values[2]),
             color: Color::from_value(values[3]),
@@ -85,7 +76,7 @@ impl AppParams for Params {
 
     fn to_values(&self) -> Vec<Value, APP_MAX_PARAMS> {
         let mut vec = Vec::new();
-        vec.push(self.bipolar.into()).unwrap();
+        vec.push(self.range.into()).unwrap();
         vec.push(self.midi_channel.into()).unwrap();
         vec.push(self.delay.into()).unwrap();
         vec.push(self.color.into()).unwrap();
@@ -115,7 +106,13 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id, Params {
+        range: Range::_0_10V,
+        midi_channel: MidiChannel::default(),
+        midi_out: MidiOut::default(),
+        delay: 0,
+        color: Color::Orange,
+    });
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -144,10 +141,10 @@ pub async fn run(
     let faders = app.use_faders();
     let leds = app.use_leds();
 
-    let (bipolar, midi_out, midi_channel, delay, led_color) =
-        params.query(|p| (p.bipolar, p.midi_out, p.midi_channel, p.delay, p.color));
+    let (range, midi_out, midi_channel, delay, led_color) =
+        params.query(|p| (p.range, p.midi_out, p.midi_channel, p.delay, p.color));
 
-    let midi = app.use_midi_output(midi_out, midi_channel);
+    let midi = app.use_midi_output(midi_out, midi_channel, false);
 
     let muted_glob = app.make_global(false);
 
@@ -161,12 +158,6 @@ pub async fn run(
         leds.set(1, Led::Button, led_color, BUTTON_BRIGHTNESS);
         leds.set(0, Led::Button, led_color, BUTTON_BRIGHTNESS);
     }
-    let range = if bipolar {
-        Range::_Neg5_5V
-    } else {
-        Range::_0_10V
-    };
-
     let input = app.make_in_jack(0, range).await;
     let quantizer = app.use_quantizer(range);
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.9.0-beta.0 (2026-04-17)
+
+### Features
+
+- change scene via midi program-change message (#459)
+- flash scene LED when clock is running (#471)
+- add 14bit MIDI-CC/NRPN support (#470)
+- add LED feedback for straight/triplet division settings (#481)
+- show led info on scene button press (#489)
+- add division parameter for resolution handling in clock divider (#455)
+- add random+ app (#453)
+- add clock divider+ app  (#456)
+- add fp-grids app (#467)
+- add swing option to clock (#491)
+
+### Fixes
+
+- make MidiCC default values more predictable (#490)
+- convert bipolar to range params (#494)
+
+## 1.8.2 (2026-03-16)
+
+### Fixes
+
+- use try_send for i2c messages
+
+## 1.8.1 (2026-03-15)
+
+### Fixes
+
+- fix hanging notes when pausing clock (#448)
+- add public tick counter, reset delay (#449)
+- fix jitter issue (#468)
+- make tick counter start on 0 after reset (#479)
+- make analog ticks more resilient (#458)
+- repair i2c leader (#480)
+- improved fader jitter handling (#469)
+
 ## 1.8.0 (2026-02-23)
 
 ### Features

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub mod colors;
 pub mod constants;
 pub mod ext;
+pub mod fp_grids_lib;
 pub mod i2c_proto;
 pub mod latch;
 pub mod quantizer;
@@ -343,6 +344,8 @@ pub struct ClockConfig {
     pub ext_ppqn: u8,
     pub reset_src: ResetSrc,
     pub internal_bpm: f32,
+    /// Deluge-style swing amount in `[-35, 35]`. `0` = straight.
+    pub swing_amount: i8,
 }
 
 #[allow(clippy::new_without_default)]
@@ -353,6 +356,7 @@ impl ClockConfig {
             clock_src: ClockSrc::Internal,
             reset_src: ResetSrc::None,
             internal_bpm: 120.0,
+            swing_amount: 0,
         }
     }
 }
@@ -711,6 +715,7 @@ pub enum Param {
         name: &'static str,
     },
     MidiOut,
+    MidiNrpn,
 }
 
 #[allow(non_camel_case_types)]
@@ -731,6 +736,7 @@ pub enum Value {
     MidiMode(MidiMode),
     MidiNote(MidiNote),
     MidiOut(MidiOut),
+    MidiNrpn(bool),
 }
 
 impl From<Curve> for Value {
@@ -955,7 +961,13 @@ impl FromValue for Range {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, PostcardBindings)]
-pub struct MidiCc(u8);
+pub struct MidiCc(u16);
+
+impl MidiCc {
+    pub fn as_u16(&self) -> u16 {
+        self.0
+    }
+}
 
 impl FromValue for MidiCc {
     fn from_value(value: Value) -> Self {
@@ -968,13 +980,25 @@ impl FromValue for MidiCc {
 
 impl From<u8> for MidiCc {
     fn from(value: u8) -> Self {
-        Self(value.min(127))
+        Self(value as u16)
+    }
+}
+
+impl From<u16> for MidiCc {
+    fn from(value: u16) -> Self {
+        Self(value.min(16383))
+    }
+}
+
+impl From<i32> for MidiCc {
+    fn from(value: i32) -> Self {
+        Self((value.clamp(0, 16383)) as u16)
     }
 }
 
 impl From<MidiCc> for u7 {
     fn from(value: MidiCc) -> Self {
-        u7::from_int_lossy(value.0)
+        u7::from_int_lossy(value.0 as u8)
     }
 }
 
@@ -1072,6 +1096,13 @@ impl Add<MidiNote> for MidiNote {
 
     fn add(self, rhs: MidiNote) -> Self::Output {
         Self(self.0.saturating_add(rhs.0).min(127))
+    }
+}
+
+impl MidiNote {
+    /// Transpose a MidiNote by +/- semitones
+    pub fn transpose(&mut self, semitones: i8) -> Self {
+        Self((self.0 as i8 + semitones).clamp(0, 127) as u8)
     }
 }
 

@@ -13,6 +13,8 @@ use smart_leds::colors::BLACK;
 use smart_leds::{brightness, gamma, SmartLedsWriteAsync, RGB8};
 use ws2812_async::{Grb, Ws2812};
 
+use crate::tasks::clock::METRONOME_HIGH;
+
 const REFRESH_RATE: u64 = 60;
 const T: u64 = 1000 / REFRESH_RATE;
 const NUM_LEDS: usize = 50;
@@ -25,7 +27,7 @@ static LED_SIGNALS: [Signal<CriticalSectionRawMutex, LedMsg>; NUM_LEDS] =
 
 static LED_OVERLAY_CHANNEL: Channel<
     CriticalSectionRawMutex,
-    (usize, LedMode),
+    (usize, Option<LedMode>),
     LED_OVERLAY_CHANNEL_SIZE,
 > = Channel::new();
 
@@ -53,6 +55,8 @@ pub enum LedMode {
     FadeOut(Color),
     Flash(Color, Option<usize>),
     StaticFade(Color, u16),
+    ClockFlash(Color, Brightness, Brightness),
+    FlashThenStatic(Color, usize, Color, Brightness),
 }
 
 impl LedMode {
@@ -76,6 +80,20 @@ impl LedMode {
                 delay_ms,
                 elapsed_frames: 0,
             },
+            LedMode::ClockFlash(color, brightness_high, brightness_low) => LedEffect::ClockFlash {
+                color: color.into(),
+                brightness_high: brightness_high.into(),
+                brightness_low: brightness_low.into(),
+            },
+            LedMode::FlashThenStatic(color, times, then_color, then_brightness) => {
+                LedEffect::FlashThenStatic {
+                    color: color.into(),
+                    times,
+                    step: 0,
+                    then_color: then_color.into(),
+                    then_brightness: then_brightness.into(),
+                }
+            }
         }
     }
 }
@@ -100,6 +118,18 @@ enum LedEffect {
         color: RGB8,
         delay_ms: u16,
         elapsed_frames: u64,
+    },
+    ClockFlash {
+        color: RGB8,
+        brightness_high: u8,
+        brightness_low: u8,
+    },
+    FlashThenStatic {
+        color: RGB8,
+        times: usize,
+        step: u8,
+        then_color: RGB8,
+        then_brightness: u8,
     },
 }
 
@@ -151,6 +181,50 @@ impl LedEffect {
                     } else {
                         *step = 0;
                     }
+                }
+
+                result
+            }
+            LedEffect::ClockFlash {
+                color,
+                brightness_high,
+                brightness_low,
+            } => {
+                if METRONOME_HIGH.load(Ordering::Relaxed) {
+                    color.scale(*brightness_high)
+                } else {
+                    color.scale(*brightness_low)
+                }
+            }
+            LedEffect::FlashThenStatic {
+                color,
+                times,
+                step,
+                then_color,
+                then_brightness,
+            } => {
+                if *times == 0 {
+                    let c = *then_color;
+                    let b = *then_brightness;
+                    *self = LedEffect::Static {
+                        color: c,
+                        brightness: b,
+                    };
+                    return c.scale(b);
+                }
+
+                let cycle_step = *step % 16;
+                let result = if cycle_step < 8 {
+                    let fade_step = cycle_step * 32;
+                    color.scale(255 - fade_step)
+                } else {
+                    BLACK
+                };
+
+                *step += 1;
+                if *step >= 16 {
+                    *times -= 1;
+                    *step = 0;
                 }
 
                 result
@@ -243,7 +317,12 @@ pub fn set_led_mode(channel: usize, position: Led, msg: LedMsg) {
 
 pub async fn set_led_overlay_mode(channel: usize, position: Led, mode: LedMode) {
     let no = get_no(channel, position);
-    LED_OVERLAY_CHANNEL.send((no, mode)).await;
+    LED_OVERLAY_CHANNEL.send((no, Some(mode))).await;
+}
+
+pub async fn clear_led_overlay(channel: usize, position: Led) {
+    let no = get_no(channel, position);
+    LED_OVERLAY_CHANNEL.send((no, None)).await;
 }
 
 #[embassy_executor::task]
@@ -259,9 +338,10 @@ async fn run_leds(spi1: Spi<'static, SPI1, Async>) {
 
     startup_animation(&mut leds).await;
 
-    leds.base_layer[16] = LedEffect::Static {
+    leds.base_layer[16] = LedEffect::ClockFlash {
         color: Color::Pink.into(),
-        brightness: Brightness::Mid.into(),
+        brightness_high: Brightness::High.into(),
+        brightness_low: Brightness::Mid.into(),
     };
     leds.base_layer[17] = LedEffect::Static {
         color: Color::Yellow.into(),
@@ -301,7 +381,10 @@ async fn run_leds(spi1: Spi<'static, SPI1, Async>) {
         }
 
         while let Ok((no, mode)) = LED_OVERLAY_CHANNEL.try_receive() {
-            leds.overlay_layer[no] = mode.into_effect();
+            leds.overlay_layer[no] = match mode {
+                Some(m) => m.into_effect(),
+                None => LedEffect::Off,
+            };
         }
 
         leds.process().await;

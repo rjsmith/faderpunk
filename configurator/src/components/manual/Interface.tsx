@@ -62,7 +62,9 @@ export const Interface = () => (
         </strong>
         <br />
         Positioned above the Shift button, this button is used to{" "}
-        <strong>save and recall scenes</strong>:
+        <strong>save and recall scenes</strong>, this buttons also acts as a{" "}
+        <strong>tempo indicator</strong> and flashes when the{" "}
+        <strong>clock</strong> is running.
         <List>
           <li>
             <strong>To save a scene</strong>: Press and hold the Scene button,
@@ -130,6 +132,10 @@ export const Interface = () => (
         <strong>quantizer root note</strong>
       </li>
       <li>
+        <strong>Scene + Fader 15</strong> → Adjusts <strong>swing</strong> (–35
+        to +35 ticks)
+      </li>
+      <li>
         <strong>Scene + Fader 16</strong> → Controls <strong>BPM</strong> (when
         using the internal clock)
       </li>
@@ -137,8 +143,8 @@ export const Interface = () => (
     <p>Additionally:</p>
     <List>
       <li>
-        <strong>Scene + Shift</strong> → <strong>Starts/stops</strong> the
-        internal clock
+        <strong>Hold scene and then press Shift</strong> →{" "}
+        <strong>Starts/stops</strong> the internal clock
       </li>
     </List>
     <p>
@@ -147,10 +153,22 @@ export const Interface = () => (
     </p>
 
     <p className="mt-4">
-      When adjusting the <strong>quantizer scale</strong> (Fader 4) or{" "}
-      <strong>quantizer root note</strong> (Fader 5), the LED below the
+      The <strong>quantizer scale</strong> (Fader 4) or{" "}
+      <strong>quantizer root note</strong> (Fader 5), the LED on top of the
       respective fader displays a color indicating the current selection. This
-      provides immediate visual feedback for the active scale or tonic.
+      provides immediate visual feedback for the active scale or tonic. The LEDs
+      on the bottom of the fader display the notes of the selected scale, with
+      the intensity reflecting whether the note is in the scale or not. White
+      keys are represented by a white LED and black by a yellow LED.
+    </p>
+    <p className="mt-4">
+      For <strong>swing</strong> (Fader 15), the top LED shows both the
+      direction and amount of swing: a{" "}
+      <strong className="text-cyan-fp">cyan</strong> LED indicates positive
+      (late) swing, while an{" "}
+      <strong className="text-palette-orange">orange</strong> LED indicates
+      negative (early) swing. The brightness scales with the swing amount — the
+      LED is off when swing is set to zero.
     </p>
 
     <Table

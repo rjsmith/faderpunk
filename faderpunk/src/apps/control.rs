@@ -7,7 +7,7 @@ use heapless::Vec;
 use libfp::{
     ext::FromValue,
     latch::LatchLayer,
-    utils::{attenuate, attenuate_bipolar, clickless, split_unsigned_value},
+    utils::{attenuate, attenuate_bipolar, clickless, slew_2, split_unsigned_value},
     AppIcon, Brightness, Color, MidiCc, MidiChannel, MidiOut, APP_MAX_PARAMS,
 };
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use libfp::{Config, Curve, Param, Range, Value};
 use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore, SceneEvent};
 
 pub const CHANNELS: usize = 1;
-pub const PARAMS: usize = 12;
+pub const PARAMS: usize = 13;
 
 pub static CONFIG: Config<PARAMS> = Config::new(
     "Control",
@@ -65,6 +65,7 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     name: "Button Channel",
 })
 .add_param(Param::MidiCc { name: "Button CC" })
+.add_param(Param::MidiNrpn)
 .add_param(Param::MidiOut);
 
 pub struct Params {
@@ -80,25 +81,7 @@ pub struct Params {
     button_mode: usize,
     button_ch: MidiChannel,
     button_cc: MidiCc,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            curve: Curve::Linear,
-            range: Range::_0_10V,
-            midi_channel: MidiChannel::default(),
-            midi_cc: MidiCc::from(32),
-            midi_out: MidiOut::default(),
-            on_release: false,
-            invert: false,
-            color: Color::Violet,
-            save_state: true,
-            button_mode: 0,
-            button_ch: MidiChannel::default(),
-            button_cc: MidiCc::from(33),
-        }
-    }
+    nrpn: bool,
 }
 
 impl AppParams for Params {
@@ -118,7 +101,8 @@ impl AppParams for Params {
             button_mode: usize::from_value(values[8]),
             button_ch: MidiChannel::from_value(values[9]),
             button_cc: MidiCc::from_value(values[10]),
-            midi_out: MidiOut::from_value(values[11]),
+            nrpn: bool::from_value(values[11]),
+            midi_out: MidiOut::from_value(values[12]),
         })
     }
 
@@ -135,6 +119,7 @@ impl AppParams for Params {
         vec.push(self.button_mode.into()).unwrap();
         vec.push(self.button_ch.into()).unwrap();
         vec.push(self.button_cc.into()).unwrap();
+        vec.push(Value::MidiNrpn(self.nrpn)).unwrap();
         vec.push(self.midi_out.into()).unwrap();
         vec
     }
@@ -161,7 +146,26 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let ch = app.start_channel as u8;
+    let param_store = ParamStore::<Params>::new(
+        app.app_id,
+        app.layout_id,
+        Params {
+            curve: Curve::Linear,
+            range: Range::_0_10V,
+            midi_channel: MidiChannel::default(),
+            midi_cc: MidiCc::from(32u8.saturating_add(ch)),
+            midi_out: MidiOut::default(),
+            on_release: false,
+            invert: false,
+            color: Color::Violet,
+            save_state: true,
+            button_mode: 0,
+            button_ch: MidiChannel::default(),
+            button_cc: MidiCc::from(48u8.saturating_add(ch)),
+            nrpn: false,
+        },
+    );
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -199,6 +203,7 @@ pub async fn run(
         button_mode,
         button_ch,
         button_cc,
+        nrpn,
     ) = params.query(|p| {
         (
             p.curve,
@@ -213,18 +218,18 @@ pub async fn run(
             p.button_mode,
             p.button_ch,
             p.button_cc,
+            p.nrpn,
         )
     });
 
     let buttons = app.use_buttons();
     let fader = app.use_faders();
     let leds = app.use_leds();
-    let midi = app.use_midi_output(midi_out, midi_chan);
-    let midi_button = app.use_midi_output(midi_out, button_ch);
+    let midi = app.use_midi_output(midi_out, midi_chan, nrpn);
+    let midi_button = app.use_midi_output(midi_out, button_ch, false);
     let i2c = app.use_i2c_output();
 
     let muted_glob = app.make_global(storage.query(|s| s.muted));
-    let output_glob = app.make_global(0);
     let latch_layer_glob = app.make_global(LatchLayer::Main);
 
     if muted_glob.get() {
@@ -245,7 +250,7 @@ pub async fn run(
         let mut latch = app.make_latch(fader.get_value());
         let mut main_layer_value = fader.get_value();
         let mut fad_val = 0;
-        let mut out = 0;
+        let mut out: u16 = 0;
         let mut last_out = 0;
 
         loop {
@@ -314,8 +319,7 @@ pub async fn run(
             if inverted {
                 attenuated = 4095 - attenuated;
             }
-            out = slew_2(out, attenuated, 3);
-
+            out = slew_2(out, attenuated, 3, 10);
             jack.set_value(out);
 
             let midi_out = if muted {
@@ -331,6 +335,7 @@ pub async fn run(
             };
             if last_out != (midi_out as u32 * 127) / 4095 {
                 midi.send_cc(midi_cc, midi_out).await;
+                i2c.send_fader_value(0, out, range);
             }
             last_out = (midi_out as u32 * 127) / 4095;
 
@@ -420,23 +425,10 @@ pub async fn run(
         }
     };
 
-    let fader_event_handler = async {
+    let save_handler = async {
         loop {
-            fader.wait_for_any_change().await;
-
-            match latch_layer_glob.get() {
-                LatchLayer::Main => {
-                    let out = output_glob.get();
-                    // Send MIDI & I2C messages
-
-                    i2c.send_fader_value(0, out).await;
-                }
-                LatchLayer::Alt => {
-                    // Now we commit to storage
-                    storage.save().await;
-                }
-                LatchLayer::Third => {}
-            }
+            app.delay_secs(1).await;
+            storage.save().await;
         }
     };
 
@@ -460,23 +452,5 @@ pub async fn run(
         }
     };
 
-    join4(
-        main_loop,
-        button_handler,
-        fader_event_handler,
-        scene_handler,
-    )
-    .await;
-}
-
-pub fn slew_2(prev: u16, input: u16, slew: u16) -> u16 {
-    // Integer-based smoothing
-    let smoothed = ((prev as u32 * slew as u32 + input as u32) / (slew as u32 + 1)) as u16;
-
-    // Snap to target if close enough
-    if (smoothed as i32 - input as i32).abs() <= slew as i32 {
-        input
-    } else {
-        smoothed
-    }
+    join4(main_loop, button_handler, save_handler, scene_handler).await;
 }

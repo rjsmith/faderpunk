@@ -7,7 +7,7 @@ use heapless::Vec;
 use libfp::{
     ext::FromValue,
     latch::LatchLayer,
-    utils::{attenuate_bipolar, clickless, split_unsigned_value},
+    utils::{attenuate_bipolar, clickless, slew_2, split_unsigned_value},
     AppIcon, Brightness, Color, MidiCc, MidiChannel, MidiOut, Waveform, APP_MAX_PARAMS,
 };
 
@@ -18,7 +18,7 @@ use libfp::{Config, Curve, Param, Range, Value};
 use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore, SceneEvent};
 
 pub const CHANNELS: usize = 2;
-pub const PARAMS: usize = 9;
+pub const PARAMS: usize = 10;
 
 pub static CONFIG: Config<PARAMS> = Config::new(
     "Panner",
@@ -58,6 +58,7 @@ pub static CONFIG: Config<PARAMS> = Config::new(
 .add_param(Param::bool {
     name: "Store state",
 })
+.add_param(Param::MidiNrpn)
 .add_param(Param::MidiOut);
 
 pub struct Params {
@@ -70,22 +71,7 @@ pub struct Params {
     on_release: bool,
     color: Color,
     save_state: bool,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            curve: Curve::Linear,
-            range: Range::_0_10V,
-            midi_channel: MidiChannel::default(),
-            midi_cc_l: MidiCc::from(32),
-            midi_cc_r: MidiCc::from(33),
-            midi_out: MidiOut([false, false, false]),
-            on_release: false,
-            color: Color::Blue,
-            save_state: true,
-        }
-    }
+    nrpn: bool,
 }
 
 impl AppParams for Params {
@@ -102,7 +88,8 @@ impl AppParams for Params {
             on_release: bool::from_value(values[5]),
             color: Color::from_value(values[6]),
             save_state: bool::from_value(values[7]),
-            midi_out: MidiOut::from_value(values[8]),
+            nrpn: bool::from_value(values[8]),
+            midi_out: MidiOut::from_value(values[9]),
         })
     }
 
@@ -116,6 +103,7 @@ impl AppParams for Params {
         vec.push(self.on_release.into()).unwrap();
         vec.push(self.color.into()).unwrap();
         vec.push(self.save_state.into()).unwrap();
+        vec.push(Value::MidiNrpn(self.nrpn)).unwrap();
         vec.push(self.midi_out.into()).unwrap();
         vec
     }
@@ -150,7 +138,23 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let ch = app.start_channel as u8;
+    let param_store = ParamStore::<Params>::new(
+        app.app_id,
+        app.layout_id,
+        Params {
+            curve: Curve::Linear,
+            range: Range::_0_10V,
+            midi_channel: MidiChannel::default(),
+            midi_cc_l: MidiCc::from(32u8.saturating_add(ch)),
+            midi_cc_r: MidiCc::from(33u8.saturating_add(ch)),
+            midi_out: MidiOut([false, false, false]),
+            on_release: false,
+            color: Color::Blue,
+            save_state: true,
+            nrpn: false,
+        },
+    );
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -185,6 +189,7 @@ pub async fn run(
         range,
         led_color,
         save_state,
+        nrpn,
     ) = params.query(|p| {
         (
             p.curve,
@@ -196,13 +201,14 @@ pub async fn run(
             p.range,
             p.color,
             p.save_state,
+            p.nrpn,
         )
     });
 
     let buttons = app.use_buttons();
     let faders = app.use_faders();
     let leds = app.use_leds();
-    let midi = app.use_midi_output(midi_out, midi_chan);
+    let midi = app.use_midi_output(midi_out, midi_chan, nrpn);
     let i2c = app.use_i2c_output();
 
     let muted_glob = app.make_global(storage.query(|s| s.muted));
@@ -359,8 +365,8 @@ pub async fn run(
             };
 
             // Slew limiting
-            out_l = slew_2(out_l, out_left, 3);
-            out_r = slew_2(out_r, out_right, 3);
+            out_l = slew_2(out_l, out_left, 3, 4);
+            out_r = slew_2(out_r, out_right, 3, 4);
 
             // MIDI output if changed
             let scaled_out = (out_l as u32 * 127) / 4095;
@@ -515,7 +521,7 @@ pub async fn run(
                 match latch_layer_glob.get() {
                     LatchLayer::Main => {
                         let out = output_glob.get();
-                        i2c.send_fader_value(0, out).await;
+                        i2c.send_fader_value(0, out, range);
                     }
                     LatchLayer::Alt => {
                         // Now we commit to storage
@@ -586,18 +592,6 @@ pub async fn run(
         scene_handler,
     )
     .await;
-}
-
-pub fn slew_2(prev: u16, input: u16, slew: u16) -> u16 {
-    // Integer-based smoothing
-    let smoothed = ((prev as u32 * slew as u32 + input as u32) / (slew as u32 + 1)) as u16;
-
-    // Snap to target if close enough
-    if (smoothed as i32 - input as i32).abs() <= slew as i32 {
-        input
-    } else {
-        smoothed
-    }
 }
 
 fn get_color_for(wave: Waveform) -> Color {

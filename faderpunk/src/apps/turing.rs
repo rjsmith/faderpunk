@@ -20,7 +20,7 @@ use crate::app::{
 };
 
 pub const CHANNELS: usize = 1;
-pub const PARAMS: usize = 8;
+pub const PARAMS: usize = 9;
 
 pub static CONFIG: Config<PARAMS> = Config::new(
     "Turing",
@@ -56,6 +56,7 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     name: "Range",
     variants: &[Range::_0_10V, Range::_0_5V, Range::_Neg5_5V],
 })
+.add_param(Param::MidiNrpn)
 .add_param(Param::MidiOut);
 
 pub struct Params {
@@ -67,21 +68,7 @@ pub struct Params {
     gatel: i32,
     color: Color,
     range: Range,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            midi_mode: MidiMode::default(),
-            midi_channel: MidiChannel::default(),
-            midi_cc: MidiCc::from(40),
-            midi_note: MidiNote::from(36),
-            midi_out: MidiOut::default(),
-            gatel: 50,
-            color: Color::Blue,
-            range: Range::_0_5V,
-        }
-    }
+    nrpn: bool,
 }
 
 impl AppParams for Params {
@@ -97,7 +84,8 @@ impl AppParams for Params {
             gatel: i32::from_value(values[4]),
             color: Color::from_value(values[5]),
             range: Range::from_value(values[6]),
-            midi_out: MidiOut::from_value(values[7]),
+            nrpn: bool::from_value(values[7]),
+            midi_out: MidiOut::from_value(values[8]),
         })
     }
 
@@ -110,6 +98,7 @@ impl AppParams for Params {
         vec.push(self.gatel.into()).unwrap();
         vec.push(self.color.into()).unwrap();
         vec.push(self.range.into()).unwrap();
+        vec.push(Value::MidiNrpn(self.nrpn)).unwrap();
         vec.push(self.midi_out.into()).unwrap();
         vec
     }
@@ -137,7 +126,21 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let param_store = ParamStore::<Params>::new(
+        app.app_id,
+        app.layout_id,
+        Params {
+            midi_mode: MidiMode::default(),
+            midi_channel: MidiChannel::default(),
+            midi_cc: MidiCc::from(32u8.saturating_add(app.start_channel as u8)),
+            midi_note: MidiNote::from(36),
+            midi_out: MidiOut::default(),
+            gatel: 50,
+            color: Color::Blue,
+            range: Range::_0_5V,
+            nrpn: false,
+        },
+    );
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -162,8 +165,8 @@ pub async fn run(
     params: &ParamStore<Params>,
     storage: &ManagedStorage<Storage>,
 ) {
-    let (midi_out, midi_mode, midi_cc, led_color, midi_chan, base_note, gatel, range) = params
-        .query(|p| {
+    let (midi_out, midi_mode, midi_cc, led_color, midi_chan, base_note, gatel, range, nrpn) =
+        params.query(|p| {
             (
                 p.midi_out,
                 p.midi_mode,
@@ -173,6 +176,7 @@ pub async fn run(
                 p.midi_note,
                 p.gatel as u32,
                 p.range,
+                p.nrpn,
             )
         });
 
@@ -184,7 +188,7 @@ pub async fn run(
     let die = app.use_die();
     let quantizer = app.use_quantizer(range);
 
-    let midi = app.use_midi_output(midi_out, midi_chan);
+    let midi = app.use_midi_output(midi_out, midi_chan, nrpn);
 
     let prob_glob = app.make_global(0);
 
@@ -286,10 +290,8 @@ pub async fn run(
                         }
                     }
                 }
-                ClockEvent::Stop => {
-                    if midi_mode == MidiMode::Note {
-                        midi.send_note_off(midi_note.get()).await;
-                    }
+                ClockEvent::Stop if midi_mode == MidiMode::Note => {
+                    midi.send_note_off(midi_note.get()).await;
                 }
                 _ => {}
             }

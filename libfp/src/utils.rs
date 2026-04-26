@@ -12,9 +12,24 @@ pub fn scale_bits_12_7(value: u16) -> u7 {
     u7::new(((value as u32 * 127) / 4095) as u8)
 }
 
+/// Scale from 4095 u16 to 255 u8
+pub fn scale_bits_12_8(value: u16) -> u8 {
+    ((value as u32 * 255) / 4095) as u8
+}
+
 /// Scale from 127 u7 to 4095 u16
 pub fn scale_bits_7_12(value: u7) -> u16 {
     ((value.as_int() as u32 * 4095) / 127) as u16
+}
+
+/// Scale from 4095 (12-bit) to 16383 (14-bit)
+pub fn scale_bits_12_14(value: u16) -> u16 {
+    ((value as u32 * 16383) / 4095) as u16
+}
+
+/// Scale from 16383 (14-bit) to 4095 (12-bit)
+pub fn scale_bits_14_12(value: u16) -> u16 {
+    ((value as u32 * 4095) / 16383) as u16
 }
 
 /// Convert u7 into u16
@@ -51,6 +66,46 @@ pub fn attenuate(signal: u16, level: u16) -> u16 {
     let attenuated = (signal as u32 * level as u32) / 4095;
 
     attenuated as u16
+}
+
+/// Rescale a 12-bit value (`0..=4095`) into a `min..=max` interval.
+pub fn rescale_12bit_int(input: u16, min: u16, max: u16) -> u16 {
+    let input = input.min(4095);
+
+    if min >= max {
+        return min;
+    }
+
+    let range = max - min;
+    min + attenuate(range, input)
+}
+
+/// Clock divider resolution table for selectable division modes.
+pub fn resolution_for_mode(mode: usize) -> &'static [u16] {
+    match mode {
+        0 => &[384, 192, 96, 48, 24, 12, 6, 3],
+        1 => &[384, 192, 96, 48, 24, 16, 8, 4, 2],
+        _ => &[384, 192, 96, 48, 24, 16, 12, 8, 6, 4, 3, 2],
+    }
+}
+
+/// Map a 12-bit value to an index into a slice of the given length.
+pub fn value_to_index(value: u16, len: usize) -> usize {
+    ((value as usize * len) / 4096).min(len.saturating_sub(1))
+}
+
+/// Map a 12-bit value to a resolution from the given table.
+pub fn value_to_resolution(value: u16, resolution: &[u16]) -> u32 {
+    resolution[value_to_index(value, resolution.len())] as u32
+}
+
+/// Map a 12-bit value to a resolution, offset by a bipolar CV input.
+pub fn resolution_with_input_offset(base: u16, in_val: u16, resolution: &[u16]) -> u32 {
+    let base_index = value_to_index(base, resolution.len()) as i32;
+    let max_offset = ((resolution.len() as i32 - 1) / 2).max(1);
+    let offset = ((in_val as i32 - 2047) * max_offset / 2047).clamp(-max_offset, max_offset);
+    let index = (base_index + offset).clamp(0, (resolution.len() - 1) as i32) as usize;
+    resolution[index] as u32
 }
 
 /// Use to attenuate 0-4095 representing a bipolar value
@@ -117,6 +172,45 @@ pub fn slew_limiter(prev: f32, input: u16, rise_rate: u16, fall_rate: u16) -> f3
     } else {
         input.clamp(0, 4095) as f32
     }
+}
+
+pub fn slew_2(prev: u16, input: u16, slew: u16, snap: i32) -> u16 {
+    let smoothed = ((prev as u32 * slew as u32 + input as u32) / (slew as u32 + 1)) as u16;
+
+    if (smoothed as i32 - input as i32).abs() < snap {
+        input
+    } else {
+        smoothed
+    }
+}
+
+/// Rotate a bit pattern left within a given bit width
+pub fn euclidean_rotl(value: u32, width: u8, rotation: u8) -> u32 {
+    let rotation = rotation % width;
+    ((value << rotation) | (value >> (width - rotation))) & ((1 << width) - 1)
+}
+
+/// Return the Bjorklund/Euclidean pattern for `num_beats` in `num_steps` as a bitmask.
+/// Bit N is set if step N fires. `rotation` offsets the pattern; `padding` extends the
+/// effective width for rotation without changing the number of active steps.
+pub fn euclidean_pattern(num_steps: u8, num_beats: u8, rotation: u8, padding: u8) -> u32 {
+    use crate::constants::BJORKLUND_PATTERNS;
+    let steps = num_steps.max(2);
+    let beats = num_beats.min(steps);
+    let index = (steps as usize - 2) * 33 + beats as usize;
+    let mut pattern = BJORKLUND_PATTERNS.get(index).copied().unwrap_or(0);
+    if rotation > 0 {
+        let rot = rotation % (steps + padding);
+        pattern = euclidean_rotl(pattern, steps + padding, rot);
+    }
+    pattern
+}
+
+/// Return true if `clock` (step count from origin) fires in an E(`num_beats`, `num_steps`) pattern.
+pub fn euclidean_at(num_steps: u8, num_beats: u8, rotation: u8, clock: u32) -> bool {
+    let pattern = euclidean_pattern(num_steps, num_beats, rotation, 0);
+    let pos = (clock % num_steps as u32) as u8;
+    (pattern & (1 << pos)) != 0
 }
 
 /// Very short slew meant to avoid clicks

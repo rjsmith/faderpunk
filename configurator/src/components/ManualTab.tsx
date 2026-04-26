@@ -26,6 +26,10 @@ const apps: ManualAppData[] = [
       "Invert",
       "Color",
       "Store state",
+      "Button mode",
+      "Button Channel",
+      "Button CC",
+      "NRPN",
     ],
     storage: [
       "Level (if 'Store state' enabled)",
@@ -56,7 +60,14 @@ const apps: ManualAppData[] = [
     description: "Multi shape LFO",
     color: "Yellow",
     icon: "sine",
-    params: ["Speed division", "Range", "Send MIDI", "MIDI Channel", "MIDI CC"],
+    params: [
+      "Speed division",
+      "Range",
+      "MIDI Channel",
+      "MIDI CC",
+      "NRPN",
+      "Send MIDI",
+    ],
     storage: ["Clocked", "Attenuation", "Speed", "Waveform"],
     text: "This is a simple LFO that lets you manually select the waveform by pressing the button, with the LED color indicating the chosen shape: sine (yellow), triangle (pink), ramp down (cyan), ramp up (red), and square (white). You can adjust the CV output range using Shift + Fader. Shift + short press resets the waveform, while Shift + long press toggles between free-running and tempo-synced modes. In free-running mode, the speed ranges from 14 Hz down to one cycle per minute. In clocked mode, available resolutions include 16th, 8thT, 8th, 4thT, 4th, 2nd, note, half bar, and bar. The app parameters allow you to set the overall speed—Normal, Slow (÷2), and Slowest (÷4)—which also applies to clocked speeds. When clocked, the button flashes in sync with the LFO rate. The output can be configured to be either bipolar (-5V to +5V) or unipolar (0V to 10V) and this also affect where the attenuator will center when outputting MIDI CC, 0 when unipolar and 64 when bipolar. This app can also be configured to output MIDI CC in the parameters and MIDI channel and CC are freely configurable",
     channels: [
@@ -135,7 +146,7 @@ const apps: ManualAppData[] = [
     description: "Generate random CC and CV values",
     color: "Green",
     icon: "random",
-    params: ["Bipolar", "MIDI Channel", "MIDI CC"],
+    params: ["Range", "MIDI Channel", "MIDI CC", "NRPN"],
     storage: ["Speed", "Muted", "Attenuation", "Slew", "Clocked"],
     text: "This app sends random CC and CV values at regular intervals, either in free-running mode or synced to a clock. The timing is set using the fader, and the MIDI channel and CC number can be configured in the parameters. Shift + Fader attenuates both CV and CC outputs, while Button + Fader accesses the onboard slew limiter, which smooths changes in both CV and CC values. Shift + Button toggles mute/unmute for the outputs. The output range can be set to unipolar or bipolar in the parameters, which also determines the mute behavior—settling at 0 in unipolar mode and in the middle in bipolar mode, similar to the Control app. Shift + Button long press switches between free-running and tempo-synced operation.",
     channels: [
@@ -322,6 +333,7 @@ const apps: ManualAppData[] = [
       "GATE %",
       "Color",
       "Range",
+      "NRPN",
     ],
     storage: ["Attenuation", "Length", "Register", "Resolution"],
     text: "This app is inspired by the concept of a Turing machine as used in modular synthesizers—a type of probabilistic sequencer that generates evolving patterns based on controlled randomness. It can be set to send either MIDI CC or MIDI notes, while CV output is always active, sending 0–10V. The fader controls the probability of bit flips: when fully down, the sequence loops without changes; when fully up, bit flips occur constantly and the sequence length doubles; in the middle, there’s a 50/50 chance of flipping, resulting in the most randomness. Holding Shift and pressing the button a number of times sets the sequence length—for example, holding Shift and pressing three times sets a 3-step sequence, which is applied upon releasing Shift. The output is quantized for both CV and MIDI notes according to the global quantizer. Parameters include MIDI channel, base note (lowest MIDI note the Turing machine can generate), gate percentage (MIDI only), and color. Main functions include using the fader to set probability, Shift + Fader to set range, Shift + Button to set sequence length, and Button + Fader to set clock resolution (32ndT, 32nd, 16thT, 16th, 8thT, 8th, 4thT, 4th). While setting clock resolution, the bottom LED is orange for triplet divisions and blue for straight divisions. All app state is stored in scenes, including the sequences themselves—making this, as far as we know, the only Turing machine with preset saving.",
@@ -352,7 +364,15 @@ const apps: ManualAppData[] = [
     description: "Turing machine, with clock input",
     color: "Orange",
     icon: "euclid",
-    params: ["MIDI mode", "Midi channel", "CC number", "Color", "Range"],
+    params: [
+      "MIDI mode",
+      "Midi channel",
+      "CC number",
+      "Color",
+      "Range",
+      "Base note",
+      "NRPN",
+    ],
     storage: ["Attenuation", "Length", "Register"],
     text: "Similar to the previous one, this is a classic Turing machine but extended to use two slots. The first jack is a clock input and the second is the CV output. The physical clock input allows for non-linear timing, custom dividers, or interaction with MIDI note lengths. The app can send either MIDI CC or MIDI notes, while CV output is always active, sending 0–10V. MIDI note on messages are sent on rising edges and note off messages on falling edges. Main functions: Fader 1 sets probability, Fader 2 sets output range. Shift + Button sets sequence length. The output is quantized by the global quantizer.",
     channels: [
@@ -671,7 +691,7 @@ const apps: ManualAppData[] = [
     description: "CV to MIDI CC",
     color: "Violet",
     icon: "note-grid",
-    params: ["Bipolar", "MIDI Channel", "MIDI CC", "Color"],
+    params: ["Range", "MIDI Channel", "MIDI CC", "Color", "NRPN"],
     storage: ["Attenuation", "Muted", "Offset"],
     text: "This app converts CV signals into MIDI CC messages. Jack 1 is the input. The configurator allows setting the input mode (unipolar or bipolar), MIDI channel, and MIDI CC. Main functions include Fader 1 for offset adjustment and Shift + Fader 1 for CV input attenuation. Button 1 mutes the output. All parameters are stored in scenes.",
     channels: [
@@ -697,7 +717,7 @@ const apps: ManualAppData[] = [
     description: "CV and gate to MIDI note converter",
     color: "Orange",
     icon: "note-box",
-    params: ["Bipolar", "MIDI Channel", "Delay (ms)", "Color"],
+    params: ["Range", "MIDI Channel", "Delay (ms)", "Color"],
     storage: [
       "Octave shift",
       "Semitone shift",
@@ -736,9 +756,9 @@ const apps: ManualAppData[] = [
     description: "Simple clock divider",
     color: "Orange",
     icon: "note-box",
-    params: ["MIDI Channel", "MIDI Note", "GATE %", "Color"],
+    params: ["MIDI Channel", "MIDI Note", "GATE %", "Divisions", "Color"],
     storage: ["Division", "Muted", "Maximum division", "Minimum division"],
-    text: "This is a simple clock divider app that was suggested by youtuber and Discord member Synthdad. The app allows for a performative control of clock division/multiplication allowing for 'build ups and drops' for example. The maximum and minimum divisions can be user set using shift + fader and button + fader respectively. These are saved into the scenes allowing you to set different ranges depending on your needs. While setting divisions, LEDs indicate the selected type: orange for triplet divisions and blue for straight divisions.",
+    text: "This is a simple clock divider app that was suggested by youtuber and Discord member Synthdad. The app allows for a performative control of clock division/multiplication allowing for 'build ups and drops' for example. The maximum and minimum divisions can be user set using shift + fader and button + fader respectively. These are saved into the scenes allowing you to set different ranges depending on your needs. The **Divisions** parameter selects which divider set is available to the fader: **Straight**, **Triplets**, or **Both**.",
     channels: [
       {
         jackTitle: "Trigger out",
@@ -769,11 +789,13 @@ const apps: ManualAppData[] = [
     params: [
       "Curve",
       "Range",
+      "MIDI Channel",
       "MIDI CC 1",
       "MIDI CC 2",
       "Mute on release",
       "Color",
       "Store state",
+      "NRPN",
     ],
     storage: [
       "Level (if 'Store state' enabled)",
@@ -819,12 +841,145 @@ const apps: ManualAppData[] = [
     ],
   },
   {
+    appId: 20,
+    title: "Random+",
+    description: "Random CC/CV with assignable CV input",
+    color: "Green",
+    icon: "random",
+    params: [
+      "Bipolar",
+      "MIDI Channel",
+      "MIDI CC",
+      "Send MIDI",
+      "Color",
+      "NRPN",
+    ],
+    storage: [
+      "Speed",
+      "Muted",
+      "Attenuation",
+      "Slew",
+      "Clocked",
+      "Input attenuation",
+      "Input mute",
+      "Input destination",
+    ],
+    text: `Random+ extends Random CC/CV with an assignable CV input lane for real-time modulation. Channel 1 handles CV input: Fader 1 sets attenuation and Button 1 mutes/unmutes the lane. Use **Shift + Button 1** to choose CV destination:
+
+- speed (yellow)
+- ext clock (pink)
+- slew (cyan)
+
+In speed mode, incoming CV offsets the speed setting. In free-running mode this changes the internal interval, and in clocked mode it offsets the selected timing-resolution index. In ext clock mode, new random values are generated only when a rising edge is detected (around 1V after attenuation/mute processing). In slew mode, incoming CV modulates transition smoothing.
+
+Channel 2 is the random output lane: Fader 2 sets base speed, **Shift + Fader 2** sets attenuation, and **Button 2 + Fader 2** sets slew. Use **Shift + short press** on Button 2 to mute/unmute output, and **Shift + long press** to toggle free-running versus clocked mode.
+
+Output range can be unipolar (0–10V) or bipolar (-5V to +5V), and MIDI CC follows the same random output stream.`,
+    channels: [
+      {
+        jackTitle: "Input",
+        jackDescription: "-5V to 5V CV in",
+        faderTitle: "CV attenuation",
+        faderDescription: "Attenuates the incoming CV",
+        faderPlusShiftTitle: "",
+        faderPlusShiftDescription: "",
+        fnTitle: "CV input mute",
+        fnDescription: "Mutes/unmutes the CV lane",
+        fnPlusShiftTitle: "CV destination",
+        fnPlusShiftDescription: "Speed (yellow), ext clock (pink), slew (cyan)",
+        ledTop: "Positive input level indicator",
+        ledTopPlusShift: "Destination color on button",
+        ledBottom: "Negative input level indicator",
+      },
+      {
+        jackTitle: "Output",
+        jackDescription: "Random CV out (0–10V or -5V to +5V)",
+        faderTitle: "Speed",
+        faderDescription: "Sets base random speed",
+        faderPlusShiftTitle: "Attenuation",
+        faderPlusShiftDescription: "Reduces output range",
+        faderPlusFnTitle: "Slew",
+        faderPlusFnDescription: "Sets random transition smoothing",
+        fnTitle: "No direct action",
+        fnDescription: "",
+        fnPlusShiftTitle: "Mute / Clock mode",
+        fnPlusShiftDescription: "Short: mute, Long: toggle free/clocked",
+        ledTop: "Positive output level indicator",
+        ledTopPlusShift: "Attenuation level in red",
+        ledBottom: "Negative output level indicator",
+      },
+    ],
+  },
+  {
+    appId: 21,
+    title: "Clock Divider+",
+    description: "Clock divider with assignable CV input",
+    color: "Orange",
+    icon: "note-box",
+    params: ["MIDI Channel", "MIDI Note", "GATE %", "Divisions", "Color"],
+    storage: [
+      "Division",
+      "Muted",
+      "Maximum division",
+      "Minimum division",
+      "CV attenuation",
+      "CV mute",
+      "CV destination",
+    ],
+    text: "**Clock Divider+** is an extension of Clock Divider that uses two channels: one CV input channel and one trigger output channel. The output channel behaves like the original divider, including MIDI note output and gate length control, while the input channel can be assigned to different jobs.\n\nThe **Divisions** parameter lets you choose the available divider set: **Straight**, **Triplets**, or **Both**. This affects what the main fader and CV offset can select.\n\nIn normal operation, **CV destination = Division** and the input CV offsets the current divider setting around the main fader value. This makes it easy to push the rhythm denser or sparser from modulation without losing your base timing.\n\nWith **CV destination = External clock**, incoming CV rising edges (around 1V threshold) are used as the clock source, similar to the external clock mode in Random+. In this mode, the divider no longer follows the internal/global tick stream and instead counts external pulses.\n\nControls follow the plus-app layout: channel 1 handles input attenuation and input mute, channel 2 handles divider range and output mute. Shift + Button 1 cycles CV destination, shown by color (division: yellow, external clock: pink).",
+    channels: [
+      {
+        jackTitle: "Input",
+        jackDescription: "-5V to 5V CV in",
+        faderTitle: "CV attenuation",
+        faderDescription:
+          "Attenuates incoming CV before destination processing",
+        faderPlusShiftTitle: "",
+        faderPlusShiftDescription: "",
+        fnTitle: "CV input mute",
+        fnDescription: "",
+        fnPlusShiftTitle: "CV destination",
+        fnPlusShiftDescription: "Division (yellow), External clock (pink)",
+        ledTop: "Positive input level indicator",
+        ledTopPlusShift: "",
+        ledBottom: "Negative input level indicator",
+      },
+      {
+        jackTitle: "Trigger out",
+        jackDescription:
+          "Sends clock-divided triggers and optional MIDI note events",
+        faderTitle: "Division",
+        faderDescription: "Sets divider amount within the active min/max range",
+        faderPlusShiftTitle: "Maximum division",
+        faderPlusShiftDescription: "Sets the upper divider limit",
+        faderPlusFnTitle: "Minimum division",
+        faderPlusFnDescription: "Sets the lower divider limit",
+        fnTitle: "",
+        fnDescription: "",
+        fnPlusShiftTitle: "Mute",
+        fnPlusShiftDescription: "Mutes trigger and MIDI output",
+        ledTop: "Trigger activity indicator",
+        ledTopPlusShift: "Maximum division indicator",
+        ledBottom: "",
+        ledBottomPlusShift: "Minimum division indicator",
+      },
+    ],
+  },
+  {
     appId: 22,
     title: "LFO+",
     description: "Multi shape LFO",
     color: "Yellow",
     icon: "sine",
-    params: ["Speed division", "Range", "Send MIDI", "MIDI Channel", "MIDI CC"],
+    params: [
+      "Speed division",
+      "Range",
+      "MIDI Channel",
+      "MIDI CC",
+      "Color",
+      "NRPN",
+      "Send MIDI",
+    ],
     storage: [
       "CV attenuation",
       "CV mute",
@@ -868,6 +1023,163 @@ const apps: ManualAppData[] = [
         ledTop: "Positive level indicator",
         ledTopPlusShift: "Attenuation level in red",
         ledBottom: "Negative level indicator",
+      },
+    ],
+  },
+  {
+    appId: 23,
+    title: "FP-Grids",
+    description:
+      "Emilie Gillet's renowned Mutable Instruments Grids topographic drum sequencer for the ATOV Faderpunk",
+    color: "Orange",
+    icon: "euclid",
+    params: [
+      "MIDI mode",
+      "MIDI channel",
+      "MIDI Note 1",
+      "MIDI Note 2",
+      "MIDI Note 3",
+      "MIDI Velocity",
+      "MIDI velocity (Accent)",
+      "Gate %",
+      "Color",
+    ],
+    storage: [
+      "Output Mode",
+      "Drums Density",
+      "Drums Map X & Y",
+      "Euclidean Fill",
+      "Euclidean Length",
+      "Euclidean Offset",
+      "Chaos",
+      "Division",
+      "Trigger Mutes",
+      "DnB Pattern",
+    ],
+    text: `
+Grids is described as a "topographic drum sequencer" - it generates a variety of drum patterns based on continuous interpolation through a "map" of patterns (Drum Mode) or using Euclidean algorithms (Euclidean Mode).  The original Mutable Instruments module manual is [here](https://pichenettes.github.io/mutable-instruments-documentation/modules/grids/manual/).
+
+* FP-Grids outputs CV gates (0V = off, 10V = on) and, optionally MIDI note on/off messages, with normal and accented velocity levels.
+* The 4th channel provides a global accent CV gate that can be used for triggering other voices or envelopes. This combines the accents from the individual three drum voices in the original Grids firmware into a single mixed Accent signal.
+
+#### Drums Output Mode
+
+Generates patterns by interpolating through a 2D map of pre-analyzed drum patterns. Sequence length is always 32 steps at 1/32nd note resolution.
+
+* **Map X / Map Y:** Controls the position on the pattern map. Small changes typically result in related rhythmic variations.
+* **Density 1 / Density 2 / Density 3:** Controls the event density (fill) for each of the three main trigger outputs.
+* **Chaos Amount:** Controls the amount of randomness applied. When set to a high value, rolls / ghost notes will be randomly added to the pattern.
+
+#### Euclidean Output Mode
+
+Generates classic Euclidean rhythms for each of the three main trigger outputs independently.
+
+* **Length 1 / Length 2 / Length 3:** Sets the total number of steps in the sequence for each output (1-16). Set with Shift + Fader.
+* **Fill 1 / Fill 2 / Fill 3:** Main faders set the number of active beats from 0 to the current Length for each channel.
+* **Offset 1 / Offset 2 / Offset 3:** While holding Shift, press channel buttons 1-3 to rotate each Euclidean pattern by one step.
+* **Chaos Amount:** Controls the probability of randomly flipping a beat on or off each step.
+* **Clock Division:** Shift + Fader 4 sets the step resolution (default 1/16th note).
+* While Shift is held in Euclidean mode, channel buttons light pink to indicate offset control.
+
+#### DnB Mode (Easter Egg)
+
+A drum and bass pattern generator with 12 preset kick/snare/hi-hat patterns and probabilistic triggering. Cycle through output modes with Shift + Button 4 until the LED shows sand/amber.
+
+* **Kick / Snare / Ghost Snare:** Faders 1, 2, and 4 set the trigger probability for each voice (0 = never, full = always).
+* **Pattern select:** Fader 3 selects one of 12 DnB patterns. The pattern changes take effect at the start of the next bar.
+* **Vary pattern:** Shift + Button 1 randomly mutates the current pattern.
+* **Restore pattern:** Shift + Button 2 restores the pattern to the last selected base pattern.
+* Clock division is set automatically by the selected pattern — Fader 4 Alt (resolution) has no effect in this mode.
+* The Ghost Snare uses the same MIDI note as Trigger 2 (Snare), at a reduced velocity.
+
+#### Patch Ideas
+
+* Try saving different Scenes with different Output Modes, then switching between scenes in a performance (sequence will reset on next step).
+* The sequencers can be reset rhythmically by patching an external trigger into one of the Faderpunk Aux Jacks (configured as a reset input).
+
+#### Acknowledgements
+
+* Original Concept & Code: Emilie Gillet (Mutable Instruments). The original Eurorack module source code can be found [here](https://github.com/pichenettes/eurorack/tree/master/grids).
+* Faderpunk Port: Richard Smith (Discord: phommed)
+* Special acknowledgement: [Disting NT "nt_grids" Port](https://github.com/thorinside/nt_grids/tree/main) by Neal Sanche (GitHub: Thorinside)
+
+#### Channels
+
+Fader functions vary by output mode. Drums / Euclidean / DnB descriptions are shown where they differ.
+
+`,
+    channels: [
+      {
+        jackTitle: "Trigger output 1",
+        jackDescription: "Bass drum / Euclidean Ch1 / Kick gate output",
+        faderTitle: "Density 1 / Fill 1 / Kick Probability",
+        faderDescription:
+          "Drums: note density for trigger 1. Euclidean: fill amount (0 to current length). DnB: kick trigger probability.",
+        faderPlusShiftTitle: "Map X / Euclidean Length 1",
+        faderPlusShiftDescription:
+          "Drums: interpolating scan through drum map X axis. Euclidean: pattern length 1-16 steps. DnB: no function.",
+        ledTop: "Gate output 1",
+        ledBottom: "Density / Fill / Probability level",
+        ledBottomPlusShift: "Map X amount",
+        fnTitle: "Mute 1",
+        fnDescription: "Mute trigger 1",
+        fnPlusShiftTitle: "Euclidean Offset 1 / Vary DnB Pattern",
+        fnPlusShiftDescription:
+          "Euclidean: Shift + Button 1 rotates pattern 1 by one step. DnB: Shift + Button 1 randomly varies the current pattern.",
+      },
+      {
+        jackTitle: "Trigger output 2",
+        jackDescription: "Snare / Euclidean Ch2 / Snare gate output",
+        faderTitle: "Density 2 / Fill 2 / Snare Probability",
+        faderDescription:
+          "Drums: note density for trigger 2. Euclidean: fill amount (0 to current length). DnB: snare trigger probability.",
+        faderPlusShiftTitle: "Map Y / Euclidean Length 2",
+        faderPlusShiftDescription:
+          "Drums: interpolating scan through drum map Y axis. Euclidean: pattern length 1-16 steps. DnB: no function.",
+        ledTop: "Gate output 2",
+        ledBottom: "Density / Fill / Probability level",
+        ledBottomPlusShift: "Map Y amount",
+        fnTitle: "Mute 2",
+        fnDescription: "Mute trigger 2",
+        fnPlusShiftTitle: "Euclidean Offset 2 / Restore DnB Pattern",
+        fnPlusShiftDescription:
+          "Euclidean: Shift + Button 2 rotates pattern 2 by one step. DnB: Shift + Button 2 restores the pattern to the base.",
+      },
+      {
+        jackTitle: "Trigger output 3",
+        jackDescription: "Hi-Hat / Euclidean Ch3 / Hi-Hat gate output",
+        faderTitle: "Density 3 / Fill 3 / DnB Pattern Select",
+        faderDescription:
+          "Drums: note density for trigger 3. Euclidean: fill amount (0 to current length). DnB: selects one of 12 patterns (change takes effect at next bar).",
+        faderPlusShiftTitle: "Euclidean Length 3",
+        faderPlusShiftDescription:
+          "Euclidean: pattern length 1-16 steps. Drums / DnB: no function.",
+        ledTop: "Gate output 3",
+        ledBottom: "Density / Fill / Pattern number",
+        fnTitle: "Mute 3",
+        fnDescription: "Mute trigger 3",
+        fnPlusShiftTitle: "Euclidean Offset 3",
+        fnPlusShiftDescription:
+          "Euclidean: Shift + Button 3 rotates pattern 3 by one step. Drums / DnB: no function.",
+      },
+      {
+        jackTitle: "Accent / Ghost Snare gate output",
+        jackDescription:
+          "Global accent gate output (Drums / Euclidean) or Ghost Snare gate output (DnB)",
+        faderTitle: "Chaos / Ghost Probability",
+        faderDescription:
+          "Drums / Euclidean: pattern randomisation and humanisation. DnB: ghost snare trigger probability.",
+        faderPlusShiftTitle: "Resolution",
+        faderPlusShiftDescription:
+          "Sets clock resolution (Drums / Euclidean only): 32ndT, 32nd, 16thT, 16th (default), 8thT, 8th, 4thT, 4th, 2nd, note, half bar, bar. No effect in DnB mode.",
+        ledTop: "Accent / Ghost Snare gate output",
+        ledBottom: "Chaos / Ghost Probability level",
+        ledBottomPlusShift: "Resolution in blue, 16th note shown in yellow",
+        fnTitle: "Accent / Ghost Mute",
+        fnDescription: "Mute accent (Drums / Euclidean) or ghost snare (DnB)",
+        fnPlusShiftTitle: "Cycle Output Mode",
+        fnPlusShiftDescription:
+          "Cycles through output modes: Light Blue = Drums, Pink = Euclidean, Sand = DnB",
       },
     ],
   },

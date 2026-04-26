@@ -12,12 +12,12 @@ use serde::{Deserialize, Serialize};
 use libfp::{
     ext::FromValue,
     latch::LatchLayer,
-    utils::{bits_7_16, clickless, scale_bits_7_12},
+    utils::{bits_7_16, clickless, scale_bits_14_12, scale_bits_7_12},
     AppIcon, Brightness, Color, Config, Curve, MidiCc, MidiChannel, MidiIn, MidiNote, Param, Range,
     Value, APP_MAX_PARAMS,
 };
 
-use crate::app::{App, AppParams, AppStorage, Led, ManagedStorage, ParamStore, SceneEvent};
+use crate::app::{App, AppMidiEvent, AppParams, AppStorage, Led, ManagedStorage, ParamStore, SceneEvent};
 
 pub const CHANNELS: usize = 1;
 pub const PARAMS: usize = 9;
@@ -78,22 +78,6 @@ pub struct Params {
     gate_vel: bool,
 }
 
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            mode: 0,
-            curve: Curve::Linear,
-            midi_channel: MidiChannel::default(),
-            midi_cc: MidiCc::from(32),
-            midi_note: MidiNote::from(36),
-            midi_in: MidiIn::default(),
-            bend_range: 12,
-            color: Color::Cyan,
-            gate_vel: false,
-        }
-    }
-}
-
 impl AppParams for Params {
     fn from_values(values: &[Value]) -> Option<Self> {
         if values.len() < PARAMS {
@@ -148,7 +132,17 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id, Params {
+        mode: 0,
+        curve: Curve::Linear,
+        midi_channel: MidiChannel::default(),
+        midi_cc: MidiCc::from(32u8.saturating_add(app.start_channel as u8)),
+        midi_note: MidiNote::from(36),
+        midi_in: MidiIn::default(),
+        bend_range: 12,
+        color: Color::Cyan,
+        gate_vel: false,
+    });
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -423,12 +417,19 @@ pub async fn run(
     let midi_handler = async {
         let mut note_num: i32 = 0;
         loop {
-            match midi_in.wait_for_message().await {
-                MidiMessage::Controller { controller, value } => {
-                    if mode == 0 && controller == u7::from(midi_cc) {
-                        let val = scale_bits_7_12(value);
+            match midi_in.wait_for_event().await {
+                AppMidiEvent::Nrpn { param, value } => {
+                    if mode == 0 && param == midi_cc.as_u16() {
+                        let val = scale_bits_14_12(value);
                         offset_glob.set(val);
                     }
+                }
+                AppMidiEvent::Message(msg) => match msg {
+                MidiMessage::Controller { controller, value }
+                    if mode == 0 && controller == u7::from(midi_cc) =>
+                {
+                    let val = scale_bits_7_12(value);
+                    offset_glob.set(val);
                 }
                 MidiMessage::NoteOn { key, vel } => {
                     // Sometimes note-off will be a NoteOn with velocity 0
@@ -436,27 +437,25 @@ pub async fn run(
                         handle_note_off(key, &mut note_num);
                     } else {
                         match mode {
-                            1 => {
-                                if !muted_glob.get() {
-                                    // Legato detection: if a note is already held, enable glide
-                                    let is_legato = note_num > 0;
-                                    glide_active_glob.set(is_legato);
-                                    note_num += 1;
+                            1 if !muted_glob.get() => {
+                                // Legato detection: if a note is already held, enable glide
+                                let is_legato = note_num > 0;
+                                glide_active_glob.set(is_legato);
+                                note_num += 1;
 
-                                    let mut note_in = bits_7_16(key);
-                                    note_in = (note_in as u32 * 410 / 12) as u16;
-                                    let main_val = storage.query(|s| s.main_layer_val);
-                                    let oct = (main_val as i32 * 10 / 4095) - 5;
-                                    let note_out =
-                                        (note_in as i32 + oct * 410).clamp(0, 4095) as u16;
-                                    pitch_glob.set(note_out);
-                                    leds.set(
-                                        0,
-                                        Led::Top,
-                                        led_color,
-                                        Brightness::Custom((note_out / 16) as u8),
-                                    );
-                                }
+                                let mut note_in = bits_7_16(key);
+                                note_in = (note_in as u32 * 410 / 12) as u16;
+                                let main_val = storage.query(|s| s.main_layer_val);
+                                let oct = (main_val as i32 * 10 / 4095) - 5;
+                                let note_out =
+                                    (note_in as i32 + oct * 410).clamp(0, 4095) as u16;
+                                pitch_glob.set(note_out);
+                                leds.set(
+                                    0,
+                                    Led::Top,
+                                    led_color,
+                                    Brightness::Custom((note_out / 16) as u8),
+                                );
                             }
                             2 => {
                                 if !muted_glob.get() {
@@ -487,20 +486,18 @@ pub async fn run(
                                     Brightness::Custom((vel_out / 16) as u8),
                                 );
                             }
-                            6 => {
-                                if key == u7::from(note) {
-                                    if !muted_glob.get() {
-                                        let vel_out = if gate_vel {
-                                            (scale_bits_7_12(vel) as u32 * 3685 / 4095 + 410) as u16
-                                        } else {
-                                            4095
-                                        };
-                                        jack.set_value(vel_out);
-                                        note_num += 1;
-                                        leds.set(0, Led::Top, led_color, LED_BRIGHTNESS);
+                            6 if key == u7::from(note) => {
+                                if !muted_glob.get() {
+                                    let vel_out = if gate_vel {
+                                        (scale_bits_7_12(vel) as u32 * 3685 / 4095 + 410) as u16
                                     } else {
-                                        note_num = 0;
-                                    }
+                                        4095
+                                    };
+                                    jack.set_value(vel_out);
+                                    note_num += 1;
+                                    leds.set(0, Led::Top, led_color, LED_BRIGHTNESS);
+                                } else {
+                                    note_num = 0;
                                 }
                             }
                             _ => {}
@@ -529,14 +526,13 @@ pub async fn run(
                     }
                     _ => {}
                 },
-                MidiMessage::ChannelAftertouch { vel } => {
-                    if mode == 4 {
-                        let val = scale_bits_7_12(vel);
-                        offset_glob.set(val);
-                    }
+                MidiMessage::ChannelAftertouch { vel } if mode == 4 => {
+                    let val = scale_bits_7_12(vel);
+                    offset_glob.set(val);
                 }
 
                 _ => {}
+                } // AppMidiEvent::Message
             }
         }
     };

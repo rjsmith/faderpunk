@@ -82,6 +82,9 @@ export const getDefaultValue = (val: Value) => {
     case "MidiMode": {
       return val.value.tag;
     }
+    case "MidiNrpn": {
+      return val.value;
+    }
   }
 };
 
@@ -134,6 +137,8 @@ const getParamValue = (
       };
     case "MidiMode":
       return { tag: "MidiMode", value: { tag: value as MidiModeTag } };
+    case "MidiNrpn":
+      return { tag: "MidiNrpn", value: value as boolean };
     default:
       return undefined;
   }
@@ -228,7 +233,7 @@ export const recalculateStartChannels = (layout: AppLayout) => {
   });
 };
 
-const findFreeSlot = (layout: AppLayout, requiredChannels: number) => {
+export const findFreeSlot = (layout: AppLayout, requiredChannels: number) => {
   if (requiredChannels <= 0) {
     return null;
   }

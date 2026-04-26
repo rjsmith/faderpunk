@@ -7,8 +7,11 @@ use heapless::Vec;
 use serde::{Deserialize, Serialize};
 
 use libfp::{
-    ext::FromValue, latch::LatchLayer, AppIcon, Brightness, ClockDivision, Color, Config,
-    MidiChannel, MidiNote, MidiOut, Param, Value, APP_MAX_PARAMS,
+    ext::FromValue,
+    latch::LatchLayer,
+    utils::{rescale_12bit_int, resolution_for_mode, value_to_resolution},
+    AppIcon, Brightness, ClockDivision, Color, Config, MidiChannel, MidiNote, MidiOut, Param,
+    Value, APP_MAX_PARAMS,
 };
 
 use crate::app::{
@@ -16,9 +19,9 @@ use crate::app::{
 };
 
 pub const CHANNELS: usize = 1;
-pub const PARAMS: usize = 5;
+pub const PARAMS: usize = 6;
 
-const LED_BRIGHTNESS: Brightness = Brightness::High;
+const LED_BRIGHTNESS: Brightness = Brightness::Mid;
 
 pub static CONFIG: Config<PARAMS> = Config::new(
     "Clock Divider",
@@ -34,6 +37,10 @@ pub static CONFIG: Config<PARAMS> = Config::new(
     name: "GATE %",
     min: 1,
     max: 100,
+})
+.add_param(Param::Enum {
+    name: "Divisions",
+    variants: &["Straight", "Triplets", "Both"],
 })
 .add_param(Param::Color {
     name: "Color",
@@ -55,19 +62,8 @@ pub struct Params {
     midi_out: MidiOut,
     note: MidiNote,
     gatel: i32,
+    division_mode: usize,
     color: Color,
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            midi_channel: MidiChannel::default(),
-            midi_out: MidiOut([false, false, false]),
-            note: MidiNote::from(32),
-            gatel: 50,
-            color: Color::Cyan,
-        }
-    }
 }
 
 impl AppParams for Params {
@@ -75,12 +71,14 @@ impl AppParams for Params {
         if values.len() < PARAMS {
             return None;
         }
+
         Some(Self {
             midi_channel: MidiChannel::from_value(values[0]),
             note: MidiNote::from_value(values[1]),
             gatel: i32::from_value(values[2]),
-            color: Color::from_value(values[3]),
-            midi_out: MidiOut::from_value(values[4]),
+            division_mode: usize::from_value(values[3]),
+            color: Color::from_value(values[4]),
+            midi_out: MidiOut::from_value(values[5]),
         })
     }
 
@@ -89,6 +87,7 @@ impl AppParams for Params {
         vec.push(self.midi_channel.into()).unwrap();
         vec.push(self.note.into()).unwrap();
         vec.push(self.gatel.into()).unwrap();
+        vec.push(self.division_mode.into()).unwrap();
         vec.push(self.color.into()).unwrap();
         vec.push(self.midi_out.into()).unwrap();
         vec
@@ -117,7 +116,18 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let param_store = ParamStore::<Params>::new(
+        app.app_id,
+        app.layout_id,
+        Params {
+            midi_channel: MidiChannel::default(),
+            midi_out: MidiOut([false, false, false]),
+            note: MidiNote::from(32),
+            gatel: 50,
+            division_mode: 2,
+            color: Color::Cyan,
+        },
+    );
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -142,8 +152,16 @@ pub async fn run(
     params: &ParamStore<Params>,
     storage: &ManagedStorage<Storage>,
 ) {
-    let (midi_out, midi_chan, note, gatel, led_color) =
-        params.query(|p| (p.midi_out, p.midi_channel, p.note, p.gatel as u32, p.color));
+    let (midi_out, midi_chan, note, gatel, division_mode, led_color) = params.query(|p| {
+        (
+            p.midi_out,
+            p.midi_channel,
+            p.note,
+            p.gatel as u32,
+            p.division_mode,
+            p.color,
+        )
+    });
 
     let mut clock = app.use_clock();
     let ticks = clock.get_ticker();
@@ -151,26 +169,26 @@ pub async fn run(
     let buttons = app.use_buttons();
     let leds = app.use_leds();
 
-    let midi = app.use_midi_output(midi_out, midi_chan);
+    let midi = app.use_midi_output(midi_out, midi_chan, false);
 
     let glob_muted = app.make_global(false);
-    let div_glob = app.make_global(6);
-    let max_glob = app.make_global(6);
-    let min_glob = app.make_global(6);
+    let div_glob = app.make_global(6_u32);
+    let max_glob = app.make_global(6_u32);
+    let min_glob = app.make_global(6_u32);
     let glob_latch_layer = app.make_global(LatchLayer::Main);
 
     let jack = app.make_gate_jack(0, 4095).await;
 
-    let resolution = [384, 192, 96, 48, 24, 16, 12, 8, 6, 4, 3, 2];
+    let resolution = resolution_for_mode(division_mode);
 
     let (res, mute, min, max) =
         storage.query(|s| (s.fader_saved, s.mute_saved, s.min_div, s.max_div));
 
-    min_glob.set(resolution[min as usize / 345]);
-    max_glob.set(resolution[max as usize / 345]);
+    min_glob.set(value_to_resolution(min, resolution));
+    max_glob.set(value_to_resolution(max, resolution));
 
     glob_muted.set(mute);
-    div_glob.set(resolution[res as usize / 345]);
+    div_glob.set(value_to_resolution(res, resolution));
     if mute {
         leds.unset(0, Led::Button);
         leds.unset(0, Led::Top);
@@ -181,6 +199,8 @@ pub async fn run(
 
     let fut1 = async {
         let mut note_on = false;
+        let mut cached_div = div_glob.get();
+        let mut cached_gate_step = (cached_div * gatel / 100).clamp(1, cached_div - 1);
 
         loop {
             match clock.wait_for_event(ClockDivision::_1).await {
@@ -197,9 +217,13 @@ pub async fn run(
                 ClockEvent::Tick => {
                     let muted = glob_muted.get();
                     let div = div_glob.get();
+                    if div != cached_div {
+                        cached_div = div;
+                        cached_gate_step = (cached_div * gatel / 100).clamp(1, cached_div - 1);
+                    }
                     let clkn = ticks() as u32;
 
-                    if clkn.is_multiple_of(div) && !muted {
+                    if clkn.is_multiple_of(cached_div) && !muted {
                         jack.set_high().await;
                         if glob_latch_layer.get() == LatchLayer::Main {
                             if matches!(div, 2 | 4 | 8 | 16) {
@@ -212,7 +236,7 @@ pub async fn run(
                         note_on = true;
                     }
 
-                    if clkn % div == (div * gatel / 100).clamp(1, div - 1) {
+                    if clkn % cached_div == cached_gate_step {
                         if note_on {
                             midi.send_note_off(note).await;
 
@@ -226,11 +250,13 @@ pub async fn run(
                     }
 
                     if glob_latch_layer.get() != LatchLayer::Main {
-                        if clkn % max_glob.get() == (max_glob.get() * gatel / 100).clamp(1, div - 1)
+                        if clkn % max_glob.get()
+                            == (max_glob.get() * gatel / 100).clamp(1, cached_div - 1)
                         {
                             leds.set(0, Led::Top, led_color, Brightness::Off);
                         }
-                        if clkn % min_glob.get() == (min_glob.get() * gatel / 100).clamp(1, div - 1)
+                        if clkn % min_glob.get()
+                            == (min_glob.get() * gatel / 100).clamp(1, cached_div - 1)
                         {
                             leds.set(0, Led::Bottom, led_color, Brightness::Off);
                         }
@@ -291,18 +317,18 @@ pub async fn run(
                             storage.query(|s| s.min_div),
                             storage.query(|s| s.max_div),
                         );
-                        div_glob.set(resolution[val as usize / 345]);
+                        div_glob.set(value_to_resolution(val, resolution));
                         storage.modify_and_save(|s| s.fader_saved = new_value);
                     }
                     LatchLayer::Alt => {
                         let min = storage.query(|s| s.min_div);
                         storage.modify_and_save(|s| s.max_div = new_value.max(min));
-                        max_glob.set(resolution[new_value.min(max) as usize / 345]);
+                        max_glob.set(value_to_resolution(new_value.min(max), resolution));
                     }
                     LatchLayer::Third => {
                         let max = storage.query(|s| s.max_div);
                         storage.modify_and_save(|s| s.min_div = new_value.min(max));
-                        min_glob.set(resolution[new_value.min(max) as usize / 345]);
+                        min_glob.set(value_to_resolution(new_value.min(max), resolution));
                     }
                 }
             }
@@ -317,7 +343,7 @@ pub async fn run(
                     let (res, mute) = storage.query(|s| (s.fader_saved, s.mute_saved));
 
                     glob_muted.set(mute);
-                    div_glob.set(resolution[res as usize / 345]);
+                    div_glob.set(value_to_resolution(res, resolution));
                     if mute {
                         leds.unset(0, Led::Button);
                         jack.set_low().await;
@@ -351,18 +377,4 @@ pub async fn run(
     };
 
     join5(fut1, fut2, fut3, scene_handler, shift).await;
-}
-
-fn rescale_12bit_int(input: u16, min: u16, max: u16) -> u16 {
-    // Clamp input to 12-bit range
-    let input = input.min(4095);
-
-    // Handle edge case where min >= max
-    if min >= max {
-        return min;
-    }
-
-    // Rescale using integer math
-    let range = max - min;
-    min + (input as u32 * range as u32 / 4095) as u16
 }

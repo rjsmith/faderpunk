@@ -47,18 +47,6 @@ pub struct Params {
     midi_out: MidiOut,
 }
 
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            midi_channel1: MidiChannel::from(1),
-            midi_channel2: MidiChannel::from(2),
-            midi_channel3: MidiChannel::from(3),
-            midi_channel4: MidiChannel::from(4),
-            midi_out: MidiOut::default(),
-        }
-    }
-}
-
 impl AppParams for Params {
     fn from_values(values: &[Value]) -> Option<Self> {
         if values.len() < PARAMS {
@@ -117,7 +105,13 @@ impl AppStorage for Storage {}
 
 #[embassy_executor::task(pool_size = 16/CHANNELS)]
 pub async fn wrapper(app: App<CHANNELS>, exit_signal: &'static Signal<NoopRawMutex, bool>) {
-    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id);
+    let param_store = ParamStore::<Params>::new(app.app_id, app.layout_id, Params {
+        midi_channel1: MidiChannel::from(1),
+        midi_channel2: MidiChannel::from(2),
+        midi_channel3: MidiChannel::from(3),
+        midi_channel4: MidiChannel::from(4),
+        midi_out: MidiOut::default(),
+    });
     let storage = ManagedStorage::<Storage>::new(app.app_id, app.layout_id);
 
     param_store.load().await;
@@ -160,10 +154,10 @@ pub async fn run(
     let led = app.use_leds();
 
     let midi = [
-        app.use_midi_output(midi_out, midi_chan1),
-        app.use_midi_output(midi_out, midi_chan2),
-        app.use_midi_output(midi_out, midi_chan3),
-        app.use_midi_output(midi_out, midi_chan4),
+        app.use_midi_output(midi_out, midi_chan1, false),
+        app.use_midi_output(midi_out, midi_chan2, false),
+        app.use_midi_output(midi_out, midi_chan3, false),
+        app.use_midi_output(midi_out, midi_chan4, false),
     ];
 
     let cv_out = [
@@ -516,6 +510,7 @@ pub async fn run(
                         if clockn.is_multiple_of(clockres[n]) {
                             let clkindex =
                                 (clockn / clockres[n] % seq_length[n] as usize) + (n * 16);
+
                             midi[n].send_note_off(lastnote[n]).await;
                             if gateseq[clkindex] {
                                 let seq = seq_glob.get();
@@ -540,7 +535,9 @@ pub async fn run(
                                 gate_out[n].set_low().await;
                             }
                         }
-                        if (clockn - gatelength1[n] as usize).is_multiple_of(clockres[n]) {
+                        if clockn >= gatelength1[n] as usize
+                            && (clockn - gatelength1[n] as usize).is_multiple_of(clockres[n])
+                        {
                             let clkindex =
                                 (((clockn - 1) / clockres[n]) % seq_length[n] as usize) + (n * 16);
                             if gateseq[clkindex] && !legato_seq[clkindex] {

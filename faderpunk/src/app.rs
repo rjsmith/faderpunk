@@ -5,7 +5,8 @@ use embassy_rp::clocks::RoscRng;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use embassy_time::Timer;
 use max11300::config::{
-    ConfigMode0, ConfigMode3, ConfigMode5, ConfigMode7, Mode, ADCRANGE, AVR, DACRANGE, NSAMPLES,
+    ConfigMode0, ConfigMode3, ConfigMode5, ConfigMode7, Mode, Port, ADCRANGE, AVR, DACRANGE,
+    NSAMPLES,
 };
 use midly::{live::LiveEvent, num::u4, MidiMessage, PitchBend};
 use portable_atomic::Ordering;
@@ -13,7 +14,7 @@ use portable_atomic::Ordering;
 use libfp::{
     latch::AnalogLatch,
     quantizer::{Pitch, QuantizerState},
-    utils::scale_bits_12_7,
+    utils::{scale_bits_12_7, scale_bits_14_12},
     Brightness, ClockDivision, Color, Key, MidiCc, MidiChannel, MidiIn, MidiNote, MidiOut, Note,
     Range, TakeoverMode,
 };
@@ -24,12 +25,13 @@ use crate::{
         buttons::{is_channel_button_pressed, is_shift_button_pressed},
         clock::{ClockSubscriber, CLOCK_PUBSUB, TICK_COUNTER},
         global_config::get_global_config,
-        i2c::{I2cLeaderMessage, I2cLeaderSender, I2C_CONNECTED},
+        i2c::{I2cLeaderMessage, I2cLeaderSender},
         leds::{set_led_mode, LedMode, LedMsg},
-        max::{
-            MaxCmd, MaxSender, MAX_TRIGGERS_GPO, MAX_VALUES_ADC, MAX_VALUES_DAC, MAX_VALUES_FADER,
+        max::{MaxCmd, MaxSender, MAX_CHANNEL, MAX_VALUES_ADC, MAX_VALUES_DAC, MAX_VALUES_FADER},
+        midi::{
+            AppMidiSender, MidiEvent, MidiEventSource, MidiMsg, MidiPubSubChannel,
+            MidiPubSubSubscriber,
         },
-        midi::{AppMidiSender, MidiEventSource, MidiMsg, MidiPubSubChannel, MidiPubSubSubscriber},
     },
     QUANTIZER,
 };
@@ -113,11 +115,13 @@ impl GateJack {
     }
 
     pub async fn set_high(&self) {
-        MAX_TRIGGERS_GPO[self.channel].store(2, Ordering::Relaxed);
+        let port = Port::try_from(self.channel).unwrap();
+        MAX_CHANNEL.sender().send(MaxCmd::GpoSetHigh { port }).await;
     }
 
     pub async fn set_low(&self) {
-        MAX_TRIGGERS_GPO[self.channel].store(1, Ordering::Relaxed);
+        let port = Port::try_from(self.channel).unwrap();
+        MAX_CHANNEL.sender().send(MaxCmd::GpoSetLow { port }).await;
     }
 }
 
@@ -356,12 +360,12 @@ impl<const N: usize> I2cOutput<N> {
         }
     }
 
-    pub async fn send_fader_value(&self, chan: usize, value: u16) {
-        if I2C_CONNECTED.load(Ordering::Relaxed) {
-            let chan = chan.clamp(0, N - 1);
-            let msg = I2cLeaderMessage::FaderValue(self.start_channel + chan, value);
-            self.i2c_sender.send(msg).await;
-        }
+    pub fn send_fader_value(&self, chan: usize, value: u16, range: Range) {
+        let chan = chan.clamp(0, N - 1);
+        let msg = I2cLeaderMessage::FaderValue(self.start_channel + chan, value, range);
+        // Use try_send to avoid blocking the caller if the I2C channel is full.
+        // Dropping occasional updates is fine — the next update will send the current value.
+        let _ = self.i2c_sender.try_send(msg);
     }
 }
 
@@ -371,6 +375,7 @@ pub struct MidiOutput {
     midi_channel: u4,
     midi_out: MidiOut,
     midi_sender: AppMidiSender,
+    nrpn_mode: bool,
 }
 
 impl MidiOutput {
@@ -379,12 +384,14 @@ impl MidiOutput {
         start_channel: usize,
         midi_channel: u4,
         midi_sender: AppMidiSender,
+        nrpn_mode: bool,
     ) -> Self {
         Self {
             start_channel,
             midi_channel,
             midi_out,
             midi_sender,
+            nrpn_mode,
         }
     }
 
@@ -397,14 +404,19 @@ impl MidiOutput {
         self.midi_sender.send((self.start_channel, msg)).await;
     }
 
-    /// Sends a MIDI CC message.
+    /// Sends a MIDI CC message. In NRPN mode, sends as 14-bit NRPN instead.
     /// value is normalized to a range of 0-4095
     pub async fn send_cc(&self, cc: MidiCc, value: u16) {
-        let msg = MidiMessage::Controller {
-            controller: cc.into(),
-            value: scale_bits_12_7(value),
-        };
-        self.send_midi_msg(msg).await;
+        if self.nrpn_mode {
+            let msg = MidiMsg::nrpn(self.midi_channel, cc.as_u16(), value, self.midi_out);
+            self.midi_sender.send((self.start_channel, msg)).await;
+        } else {
+            let msg = MidiMessage::Controller {
+                controller: cc.into(),
+                value: scale_bits_12_7(value),
+            };
+            self.send_midi_msg(msg).await;
+        }
     }
 
     /// Sends a MIDI NoteOn message.
@@ -448,6 +460,11 @@ impl MidiOutput {
     }
 }
 
+pub enum AppMidiEvent {
+    Message(MidiMessage),
+    Nrpn { param: u16, value: u16 },
+}
+
 pub struct MidiInput {
     midi_channel: u4,
     din_sub: Option<MidiPubSubSubscriber>,
@@ -479,29 +496,55 @@ impl MidiInput {
         }
     }
 
+    async fn next_event(&mut self) -> MidiEvent {
+        match (&mut self.din_sub, &mut self.usb_sub) {
+            (Some(din), None) => din.next_message_pure().await,
+            (None, Some(usb)) => usb.next_message_pure().await,
+            (Some(din), Some(usb)) => {
+                match select(din.next_message_pure(), usb.next_message_pure()).await {
+                    Either::First(evt) => evt,
+                    Either::Second(evt) => evt,
+                }
+            }
+            (None, None) => {
+                core::future::pending::<()>().await;
+                unreachable!()
+            }
+        }
+    }
+
+    /// Wait for the next standard MIDI message on this channel (skips NRPN events).
     pub async fn wait_for_message(&mut self) -> MidiMessage {
         loop {
-            // Determine which future to await based on active subscribers
-            let event = match (&mut self.din_sub, &mut self.usb_sub) {
-                (Some(din), None) => din.next_message_pure().await,
-                (None, Some(usb)) => usb.next_message_pure().await,
-                (Some(din), Some(usb)) => {
-                    match select(din.next_message_pure(), usb.next_message_pure()).await {
-                        Either::First(evt) => evt,
-                        Either::Second(evt) => evt,
-                    }
-                }
-                (None, None) => {
-                    core::future::pending::<()>().await;
-                    unreachable!()
-                }
-            };
-
-            // Common filtering logic
-            if let LiveEvent::Midi { channel, message } = event {
+            let event = self.next_event().await;
+            if let MidiEvent::Live(LiveEvent::Midi { channel, message }) = event {
                 if channel == self.midi_channel {
                     return message;
                 }
+            }
+        }
+    }
+
+    /// Wait for any MIDI event (standard message or NRPN) on this channel.
+    pub async fn wait_for_event(&mut self) -> AppMidiEvent {
+        loop {
+            match self.next_event().await {
+                MidiEvent::Live(LiveEvent::Midi { channel, message })
+                    if channel == self.midi_channel =>
+                {
+                    return AppMidiEvent::Message(message);
+                }
+                MidiEvent::Nrpn {
+                    channel,
+                    param,
+                    value,
+                } if channel == self.midi_channel => {
+                    return AppMidiEvent::Nrpn {
+                        param,
+                        value: scale_bits_14_12(value),
+                    };
+                }
+                _ => {}
             }
         }
     }
@@ -644,11 +687,13 @@ impl<const N: usize> App<N> {
     }
 
     async fn reconfigure_jack(&self, chan: usize, mode: Mode, gpo_level: Option<u16>) {
+        let port = Port::try_from(self.start_channel + chan).unwrap();
         self.max_sender
-            .send((
-                self.start_channel + chan,
-                MaxCmd::ConfigurePort(mode, gpo_level),
-            ))
+            .send(MaxCmd::ConfigurePort {
+                port,
+                mode,
+                gpo_level,
+            })
             .await;
     }
 
@@ -744,12 +789,18 @@ impl<const N: usize> App<N> {
         )
     }
 
-    pub fn use_midi_output(&self, midi_out: MidiOut, midi_channel: MidiChannel) -> MidiOutput {
+    pub fn use_midi_output(
+        &self,
+        midi_out: MidiOut,
+        midi_channel: MidiChannel,
+        nrpn_mode: bool,
+    ) -> MidiOutput {
         MidiOutput::new(
             midi_out,
             self.start_channel,
             midi_channel.into(),
             self.midi_sender,
+            nrpn_mode,
         )
     }
 
@@ -762,7 +813,7 @@ impl<const N: usize> App<N> {
 
         loop {
             match subscriber.next_message_pure().await {
-                InputEvent::LoadScene(scene) => {
+                InputEvent::LoadSceneFromButton(scene) | InputEvent::LoadSceneFromMidi(scene) => {
                     return SceneEvent::LoadScene(scene);
                 }
                 InputEvent::SaveScene(scene) => {

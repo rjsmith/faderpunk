@@ -2,7 +2,7 @@ register_apps!(
     1 => control,
     2 => lfo,
     3 => ad,
-    4 => rndcvcc,
+    4 => rnd,
     5 => seq8,
     6 => turing,
     7 => clkturing,
@@ -18,5 +18,8 @@ register_apps!(
     17 => cv2midinote,
     18 => clk_div,
     19 => panner,
+    20 => rnd_plus,
+    21 => clk_div_plus,
     22 => lfo_plus,
+    23 => fp_grids,
 );
