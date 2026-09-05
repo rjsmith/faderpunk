@@ -1,5 +1,220 @@
 # Changelog
 
+## 0.11.0 (2026-09-05)
+
+### Breaking Changes
+
+- the phoenix has risen from the ashes
+
+### Features
+
+- hello_world
+- improve App API and add a ton of todos
+- (almost) full midi over usb/uart
+- deactivate eeprom for now
+- deactivate mux pio for now
+- add max fader change detection
+- send midi message on fader change
+- add ci scripts
+- add ws2812 led driver
+- actually implement ADC mode readings
+- use atomics for thread-spanning data
+- update embassy deps
+- compile on rp2350
+- use probe-rs next for debugging
+- add button press detection + debounce
+- implement proper scene sanity check
+- add ButtonDown cross core message
+- add ButtonDown to default app
+- add XRx channels from core 1 to 0
+- use transport/midi tasks instead of usb/serial
+- rename to Fader Punk
+- add HeroUI based suuuuper basic configurator
+- use ws2812-async led driver
+- implement dynamic scene changes
+- temporarily disable midi
+- remove async-button
+- use midi2 instead of wmidi
+- refactor usb driver passing
+- disable websub temporarily
+- re-enable midi messages
+- add global variable API
+- add runtime config
+- add option to set fader curve
+- add basic static waveforms
+- add internal clock
+- add external clock using aux jacks
+- add clock division
+- add bpm getter, improve clock precision
+- add is_button_pressed, is_shift_pressed
+- re-enable midi
+- set_led color and brightness in api
+- update embassy-rp to 0.4.0
+- add lfo app
+- use NoopRawMutex for MAX
+- add option to define in/out ranges
+- rename to faderpunk
+- refactor LFO app
+- run rp2350 at 250Mhz
+- change lfo values, adjust gamma
+- add api for top and bottom led rows
+- use Watch for clock
+- add simple trigger app
+- add GateJack
+- add reset source, scene is now layout
+- add midi note on/off api
+- Add dice roller
+- move Waveform enum into config, add bindgen
+- add gen-bindings, restructure project
+- add postcard encoded app config list
+- decode large configuration messages
+- use batch messages for app listing
+- show params in configurator temp page
+- (very) simple button debounce
+- add mute led to default app
+- redesign app parts, restructure waiters
+- add button debounce, long press
+- improve lfo
+- add wait_for_any_long_press function to app
+- refactor leds a bit, add chan clamping
+- refactor midi into struct
+- make midi channel configurable in default app
+- add sequential storage using eeprom
+- use StorageSlots for app storage values
+- simplify cross core message routing
+- add AppParams macro and storage
+- ParamStore -> Store, impl ser and des for Store
+- StorageSlot is now dependent on Store
+- store and recall current values using rpc
+- add app cleanup method
+- move param handler into param store
+- add param and cleanup loops to all apps
+- store GlobalConfig in FRAM
+- set clock sources using the configurator
+- add and set params for apps
+- re-spawn apps on param change
+- add param load and save for apps
+- use ClockEvent instead of bool for clock Watch
+- make max and midi channels CriticalSectionRawMutex Channels
+- use PubSubChannel for clock
+- vastly improve Storage API
+- restructure Arr and AppStorage
+- add midi input message forwarding
+- use static buffer for fram reads
+- remove release-plz workflow
+- add modify method to Global
+- add usb windows compatibility
+- refactor leds to allow for effects
+- move BrightnessExt to libfp
+- add led overlay effects and flash effect
+- add temporary scene save and recall effects
+- merge config crate into libfp
+- add value transformation for Enum/usize
+- update all dependencies
+- add -5V to 5V range to manual calibration
+- move Range to libfp
+- improve semi-automatic calibration
+- add color parameters to most apps
+- select color and icons for all app. Rework app order
+- migrate main configurator deployment to gh-pages branch
+- add beta release workflow for develop branch
+- add possibility to save and recall app layouts & params
+- bump minimum version to 1.5.0
+- add specialized midi params
+- add unique USB serial numbers from RP2350 chip ID
+- add jump and scale latch pickup modes
+- add takeover modes to manual (#437)
+- show led info on scene button press (#489)
+- add random+ app (#453)
+- add clock divider+ app  (#456)
+- add fp-grids app (#467)
+- add swing option to clock (#491)
+- per-note midi channels for fp-grids (#512)
+- [control] add Program Change button mode (#530)
+- [seq8] sequencer improvements — slide, probability, direction (#531)
+- [slew, quantizer, offset_att] add range param (#539)
+- [turing] add gate output mode (#542)
+- [tb3po] add TB-3PO acid pattern generator (#532)
+- [quantizer] add 1.2V/Oct Buchla mode, Key::Off passthrough, and per-app bypass (#543)
+- unified mute refactor across all apps (#537)
+- [automator] add CV gesture looper app (#533)
+- add Bernoulli Gate app (#573)
+- move configurator protocol from WebUSB to MIDI SysEx (#590)
+- variable PPQN external clock input and phase-correct clock ticks (#579)
+- Curve::Deadzone fader curve + wire into 8 apps (#578)
+- add automated PR scope-check policy (informational only) (#654)
+
+### Fixes
+
+- use color order as marker struct
+- remove Option from DAC values
+- move jack configuration state to max
+- use timeout for usb midi message
+- use atomics instead of channels for fader move event
+- a little bit of clean up
+- basic cross core comms working
+- improve cross core comms, implement waiter
+- adc channel numbering
+- use slice for scene set message
+- send clock signal to all channels
+- proper channel assignment of (In|Out)Jacks
+- handle uart rx error, remove some logs
+- midi cc count
+- waveform saw to u16
+- remove superfluous ImageDef
+- flashing bug
+- shift is 17
+- improve compiler optimization settings
+- immediately set led atomics
+- implement internal clock using Ticker
+- mute midi in default app
+- make clock work using MAX GPO ports
+- use permanent receiver for clock
+- clock fixes and clock debug app
+- serialize large arrays
+- use Signal instead of Watch for ParamStore
+- alter macro to account for apps without params
+- restructure GlobalConfig to be Serialize, Deserialize
+- wait for fram to be ready on startup
+- midi uart message drops
+- loading of Globalconfig
+- move build profiles to workspace
+- drop guard for storage before saving
+- potential mutex deadlocks
+- use correct mutex type for FRAM buffers
+- sequentialize FRAM reads and writes
+- use read buffer pool for fram reads
+- use stack buffer for fram reads for callers
+- use direct memory access fram read buffers
+- vscode rust-analyzer settings
+- scene 0 should not recall "current" values
+- update postcard-bindgen to non-fork version
+- fix recurring mistake when using ticks
+- housekeeping
+- actually respond to i2c read requests
+- make a change to force rebuild
+- do not panic in app macro functions
+- validate layout after loading from fram
+- prefixed commit
+- 1 bar division  was wrong
+- exponential and logarithmic curves were switched
+- fix subdivision numbers
+- ensure gh-pages deployment pushes to correct branch
+- never erase calibration range
+- add hardware factory reset
+- double usb MAX_PAYLOAD_SIZE to 512 bytes
+- remove unused navigate parameter from connect function
+- clippy issues
+- [rnd,rnd_plus] restore last color on unmute and fix mute toggling (#585)
+- reject non-ASCII app names and descriptions (#601)
+- support current Rust toolchains (#632)
+- align .text section start to 8 bytes (#614)
+- never block the clock gatekeeper on a full pubsub (#636)
+- keep the metronome off the clock pubsub (#638)
+- drop unconsumed docs/apps manual-entry format from PR scope policy (#657)
+- turing mute ignores gate/MIDI outputs (#668)
+- recognize FPApp tooling in scope checks (#665)
+
 ## 0.10.6 (2026-09-01)
 
 ### Features

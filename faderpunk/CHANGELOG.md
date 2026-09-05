@@ -1,5 +1,679 @@
 # Changelog
 
+## 2.0.0 (2026-09-05)
+
+### Breaking Changes
+
+- the phoenix has risen from the ashes
+- release configurator 1.0
+
+### Features
+
+- hello_world
+- improve App API and add a ton of todos
+- (almost) full midi over usb/uart
+- deactivate eeprom for now
+- deactivate mux pio for now
+- add max fader change detection
+- send midi message on fader change
+- add led state machine for simple effects
+- add proper fader waiter and blink led
+- add preliminary channel button presses
+- establish basic webusb connection
+- add ci scripts
+- add ws2812 led driver
+- actually implement ADC mode readings
+- use atomics for thread-spanning data
+- update embassy deps
+- compile on rp2350
+- use probe-rs next for debugging
+- add button press detection + debounce
+- implement proper scene sanity check
+- add ButtonDown cross core message
+- add ButtonDown to default app
+- add XRx channels from core 1 to 0
+- use transport/midi tasks instead of usb/serial
+- rename to Fader Punk
+- add HeroUI based suuuuper basic configurator
+- use ws2812-async led driver
+- implement dynamic scene changes
+- temporarily disable midi
+- remove async-button
+- use midi2 instead of wmidi
+- refactor usb driver passing
+- disable websub temporarily
+- re-enable midi messages
+- add global variable API
+- add runtime config
+- add option to set fader curve
+- add basic static waveforms
+- add internal clock
+- add external clock using aux jacks
+- add clock division
+- add bpm getter, improve clock precision
+- add is_button_pressed, is_shift_pressed
+- re-enable midi
+- set_led color and brightness in api
+- update embassy-rp to 0.4.0
+- add lfo app
+- use NoopRawMutex for MAX
+- add option to define in/out ranges
+- rename to faderpunk
+- refactor LFO app
+- run rp2350 at 250Mhz
+- change lfo values, adjust gamma
+- add api for top and bottom led rows
+- use Watch for clock
+- add simple trigger app
+- add GateJack
+- add reset source, scene is now layout
+- add midi note on/off api
+- Add dice roller
+- move Waveform enum into config, add bindgen
+- add gen-bindings, restructure project
+- add postcard encoded app config list
+- decode large configuration messages
+- use batch messages for app listing
+- show params in configurator temp page
+- (very) simple button debounce
+- add mute led to default app
+- redesign app parts, restructure waiters
+- add button debounce, long press
+- improve lfo
+- add wait_for_any_long_press function to app
+- refactor leds a bit, add chan clamping
+- refactor midi into struct
+- make midi channel configurable in default app
+- send custom cc value
+- set shift and scene button to white
+- add MidiIn and MidiUSB clock sources
+- add glitchy startup animation
+- add sequential storage using eeprom
+- use StorageSlots for app storage values
+- allow storing arrays
+- simplify cross core message routing
+- add AppParams macro and storage
+- retrieve app state from configurator
+- set a param from configurator
+- always require params() in config macro
+- move storage globals into app_config
+- add simple scene implementation for StorageSlots
+- integrate scenes with scene button
+- add wait_for_scene_change method
+- pre-load everything from eeprom
+- read-before-write
+- allow long arrays for storage slots
+- ParamStore -> Store, impl ser and des for Store
+- StorageSlot is now dependent on Store
+- store and recall current values using rpc
+- implement layout setting
+- set custom layouts
+- deploy to Github pages
+- add app cleanup method
+- move param handler into param store
+- add param and cleanup loops to all apps
+- store GlobalConfig in FRAM
+- set clock sources using the configurator
+- add and set params for apps
+- re-spawn apps on param change
+- add param load and save for apps
+- use ClockEvent instead of bool for clock Watch
+- make max and midi channels CriticalSectionRawMutex Channels
+- use PubSubChannel for clock
+- vastly improve Storage API
+- restructure Arr and AppStorage
+- add midi input message forwarding
+- use static buffer for fram reads
+- remove release-plz workflow
+- add modify method to Global
+- add usb windows compatibility
+- refactor leds to allow for effects
+- move BrightnessExt to libfp
+- add led overlay effects and flash effect
+- add temporary scene save and recall effects
+- use Signals instead of Channel
+- set fader refresh rate to 1ms
+- load calibration data, use it in max task
+- i2c proto ping pong
+- add output calibration over i2c
+- add ability to use effects in apps
+- add manual calibration app
+- add latest seq8 version
+- add latest automator version
+- add latest lfo version
+- add latest ad version
+- remove test apps
+- add latest version of probatrigger app
+- add latest version of turing app
+- add latest version of clkturing app
+- improve Curve api
+- add latest version of slew app
+- add latest version of follower app
+- improve fader api
+- introduce some useful functions
+- add attenuverter and slew_limiter
+- merge config crate into libfp
+- add value transformation for Enum/usize
+- return is_shift_pressed from any button press
+- add undo for the last calibration step
+- update all dependencies
+- improve die roll function signature
+- remove usb logging for now
+- use auto-generated device version
+- fix webusb windows compatibility
+- add quantizer utility
+- add MIDI CC selection
+- add clickless mute, remove stepping
+- add bipolar param
+- add bipolar and curve param
+- add clickless function as public
+- add fader curve param for testing
+- add attenuation
+- add attenuation
+- introduced some standard LED colors and intensities
+- add quantizer to apps
+- add inverted saw waveform
+- add clocked mode
+- add legato
+- add rgb test app
+- downgrade embassy-executor and embassy-rp for now
+- downgrade heapless in libfp
+- add MidiOutput, MidiInput, MidiDuplex APIs
+- add notefader app
+- add Color param for configurator
+- bump app max param size to 8
+- use .into() instead of .get() for Color
+- add Color param component in configurator
+- separate layout from global config
+- prepare for i2c leader/follower/calibration modes
+- add -5V to 5V range to manual calibration
+- move manual calibration to i2c startup
+- add first version of automatic calibration
+- move Range to libfp
+- improve semi-automatic calibration
+- make configurator releases with built artifacts
+- add midi2cv prototype app
+- add mute and led feedback
+- reset messages resets the LFO
+- add mute on release proto function
+- add color parameters to most apps
+- add trigger on button, add midi trigger, add trigger to gate
+- rewrite quantizer, make it more predictable
+- introduce more global settings, config task loop
+- add ability to change global config via faders
+- improve led brightness and color apis
+- add button release API
+- globals are now sync
+- use new latch in default and lfo
+- complete rework of app parameter implementation
+- add Offset+Attenuator app
+- add third latch layer
+- new color api and improved color consistency
+- add slew, refine LEDs
+- renamed to "Control", make curve symmetrical around 0 when bipolar
+- rename default to control
+- bring back startup animation
+- colorize scene and shift button
+- add euclid app
+- add quantizer app
+- add cv2midi app
+- add cv2midinote app
+- add octave and semitone shift, add mute, add led feedback
+- add offset toggles
+- add semitone offset toggle
+- add quantizer on input
+- add input gain control
+- increase max gain to 2x
+- add range param
+- add note param (in case we need it)
+- use enum for midi modes in midi2cv and turing
+- i2c leader (16n compatibility mode)
+- add midi aftertouch and pitch bend API
+- move to fixed point calibration
+- start internal clock with scene+shift
+- send midi clock ticks when using internal clock
+- passthrough midi clock usb<->uart
+- remove all midi passthrough
+- add crc check
+- add color and icon config to apps
+- select color and icons for all app. Rework app order
+- add analog clock out from internal clock
+- refactor clock to allow for improved routing
+- add really long clock divisions
+- add reset out aux config option
+- add range option
+- add octave selection in shift functions
+- add gate on note mode
+- add the ability to deactivate the midi input
+- add use_midi param
+- make 16x control the default layout
+- add gate indicator
+- add new configurator scaffold
+- add new device page
+- new app overview, get and set app params
+- app layout drag&drop
+- store layout on device
+- add saved confirmation
+- add possibility to remove apps
+- add modal to add apps
+- remove old configurator
+- save global settings
+- connect page, minor additions
+- rename params, fix float field
+- add base note and gate % param
+- add speed  param
+- add invert param
+- add slew to CV and bipolar param
+- add free running mode
+- change clkcvrnd name to rndcvcc
+- add manual template
+- add manual page
+- manual app style improvements
+- display update message
+- add initial version of all app manuals
+- add update guide and fw link
+- add mvm
+- add button to clear apps
+- add param enabling fader value storage
+- add range selection, add MIDI output
+- make buttons toggles of offset and attenuverter
+- update app manual for v1.4.0
+- migrate main configurator deployment to gh-pages branch
+- add beta release workflow for develop branch
+- add range param
+- add base note param
+- update Turing and Turing+ manual
+- add panner app
+- add clock divider app
+- add possibility to save and recall app layouts & params
+- start with running clock & save clock state
+- add factory reset function
+- add velocity to `Gate` and `Note Gate` mode
+- send Out1 copy to MIDI Out2
+- store config with layout in setup file
+- add Key and Tonic mapping to the manual
+- switch to fully automatic calibration
+- bump minimum version to 1.5.0
+- bump version to align with configurator
+- add specialized midi params
+- midi out routing
+- add tb-303 style glide functionality
+- add MIDI retrigger param
+- add range param
+- add unique USB serial numbers from RP2350 chip ID
+- add velocity to gate param
+- add CC button modes
+- add lfo+ app
+- add ability to get current scale in apps
+- add documentation for v1.7 midi functions (#416)
+- add reset cv destination (#415)
+- add jump and scale latch pickup modes
+- add takeover modes to manual (#437)
+- change scene via midi program-change message (#459)
+- flash scene LED when clock is running (#471)
+- add 14bit MIDI-CC/NRPN support (#470)
+- add LED feedback for straight/triplet division settings (#481)
+- show led info on scene button press (#489)
+- add division parameter for resolution handling in clock divider (#455)
+- add random+ app (#453)
+- add clock divider+ app  (#456)
+- add fp-grids app (#467)
+- add swing option to clock (#491)
+- per-note midi channels for fp-grids (#512)
+- [control] add Program Change button mode (#530)
+- [seq8] sequencer improvements — slide, probability, direction (#531)
+- [slew, quantizer, offset_att] add range param (#539)
+- [turing] add gate output mode (#542)
+- [tb3po] add TB-3PO acid pattern generator (#532)
+- [quantizer] add 1.2V/Oct Buchla mode, Key::Off passthrough, and per-app bypass (#543)
+- unified mute refactor across all apps (#537)
+- [automator] add CV gesture looper app (#533)
+- improve LED feedback and add hardware test mode (#546)
+- simulator mode for offline use (#535)
+- add Invert toggle and Invert momentary button modes (#555)
+- move resolution to B2+F3, mute on release, rework Ch0 LEDs (#549)
+- add GenSeq generative sequencer app (#529)
+- phase-lock LFO position to clock ticks when clocked (#560)
+- [genseq] move octave shift to Shift+Fader 0, replace pitch TM length fader (#567)
+- add Bernoulli Gate app (#573)
+- move configurator protocol from WebUSB to MIDI SysEx (#590)
+- add generated, embeddable apps index page (#600)
+- MIDI out CC/NRPN from envelope output (#575)
+- default clock to running on factory-fresh boot (#610)
+- variable PPQN external clock input and phase-correct clock ticks (#579)
+- automated gain calibration wizard with AUX frequency measurement (#574)
+- Curve::Deadzone fader curve + wire into 8 apps (#578)
+- add sample & hold CV destination mode (#584)
+- add automated PR scope-check policy (informational only) (#654)
+- add App accessors for global swing, current tick, and clock-running state (#671)
+
+### Fixes
+
+- use color order as marker struct
+- remove Option from DAC values
+- move jack configuration state to max
+- use timeout for usb midi message
+- use atomics instead of channels for fader move event
+- a little bit of clean up
+- basic cross core comms working
+- improve cross core comms, implement waiter
+- adc channel numbering
+- use slice for scene set message
+- send clock signal to all channels
+- proper channel assignment of (In|Out)Jacks
+- handle uart rx error, remove some logs
+- midi cc count
+- waveform saw to u16
+- remove superfluous ImageDef
+- flashing bug
+- shift is 17
+- improve compiler optimization settings
+- immediately set led atomics
+- implement internal clock using Ticker
+- mute midi in default app
+- make clock work using MAX GPO ports
+- use permanent receiver for clock
+- clock fixes and clock debug app
+- improve clock reset behavior
+- proper midi 1 implementation using midly
+- serialize large arrays
+- quick fix for midi tx over uart. remove running status
+- use Signal instead of Watch for ParamStore
+- alter macro to account for apps without params
+- improve scene save debounce
+- raise storage bytes limit
+- check in pnpm-lock.yaml
+- restructure GlobalConfig to be Serialize, Deserialize
+- wait for fram to be ready on startup
+- midi uart message drops
+- loading of Globalconfig
+- move build profiles to workspace
+- drop guard for storage before saving
+- potential mutex deadlocks
+- use correct mutex type for FRAM buffers
+- sequentialize FRAM reads and writes
+- use read buffer pool for fram reads
+- use stack buffer for fram reads for callers
+- use direct memory access fram read buffers
+- vscode rust-analyzer settings
+- scene 0 should not recall "current" values
+- update postcard-bindgen to non-fork version
+- scene load/save debounce
+- fix param fetch
+- extend scenes to 16
+- only update LEDs at actual refresh rate
+- run led tasks in parallel
+- add separate channel for led overlay effects
+- remove saving
+- rename
+- full rework
+- some led changes
+- change name and description
+- full rework
+- full rework
+- add clamps to spliters
+- refine
+- refine
+- use utils functions
+- fix led and latching bug
+- make it recall resolution and gate length on boot
+- add attenuation fix leds
+- full rework
+- added param, saving and led feedback
+- fix recurring mistake when using ticks
+- fix bug where curve was not properly applied
+- fix  a little LED bug
+- full rework
+- add led feedback
+- correct input value properly
+- add a little more leeway for the calibration range
+- make READ_BUFFERS pointer cast a bit more ideomatic
+- make bit flip more direct
+- kill previous buffer before recording a new one
+- add interpolation to remove stepping
+- bigger dead zones on probability
+- housekeeping
+- CH4 not recalling gate and resolution
+- adjust rgb to design guide value
+- disable quantizer for now
+- fix crash on certain fader positions
+- rename Sawinv to SawInv
+- improve debounce and add button state sync
+- fix crashes on certain recalled values
+- remove running light when stopped
+- change offset default value to 0
+- use the common red color value
+- small changes to make it easier to change LED colors
+- fix curve, slew and bipolar recall
+- fix bipolar recall, update slewing to new method
+- reactivate quantizer
+- change clock switch procedure
+- small led fix, fix note trigger when changing mode
+- load params at app startup
+- better read buffer error handling
+- increase uart rx buffer size
+- improve midi subscriber instantiation
+- properly handle larger usb midi packets
+- make wait_for_message method public
+- actually respond to i2c read requests
+- add I2cMode to gen-bindings
+- adjust for i2c global params
+- make a change to force rebuild
+- adjust transformValues for 8 params
+- add linker config
+- fix color param not being sent
+- fixes for semi-automatic calibration
+- improve midi subscriber instantiation
+- adjust color order for consistency
+- fix small led bug
+- allow for holes in layout
+- do not panic in app macro functions
+- validate layout after loading from fram
+- refresh layout after setting it
+- send correct layout with channel sizes
+- unlatch when target value is changed externally
+- adjust minimum led brightness
+- scale fader readings across the dead zone
+- add all colors to configurator
+- add jitter tolerance to latch
+- remove automator from app list
+- implement new latching system
+- adjust clock config only when it was changed
+- update to new new latching
+- update to new latching system
+- upgrade to new latching system
+- update to new latching system
+- implement new latching system, refine code
+- implement new latching system
+- implement new latching system
+- fix led
+- fix midi notes
+- change description
+- add description
+- fix consistency issue between midi output and V/oct
+- implement new latching system
+- add description
+- modify name and description
+- prefixed commit
+- remove CC param
+- remove fader curve param
+- bug upon changing the resolution
+- 1 bar division  was wrong
+- Fix default values on rotation and randomization
+- fix params not being applied
+- rework to implement new button API
+- fix division setting not being recalled
+- fix led brightness inconsistency
+- reduce slew on mute
+- fix issue crash when changing to certain params
+- set offset to correct default value
+- fix attenuation curve
+- use the first 16 scale from o_C
+- add initialization check
+- use stream parsing for cobs frames
+- fix startup button press calibration
+- fix input calibration for -5 to 5V range
+- send reset event when internal clock is stopped
+- do not send reset when external clock is used
+- prevent drift and stutter while changing bpm
+- reset now actually reset to 0
+- reduce clock out trigger length to 5ms
+- rearrange the shift functions
+- only conditionally run midi handler
+- exponential and logarithmic curves were switched
+- use exponential fader curve for global led brightness
+- retain storage and parameters when app is moved
+- fix sticky params race condition
+- disable popover when dragging in layout
+- properly check activeId against null
+- fix clock transport commands
+- limit extra reset sources
+- fix subdivision numbers
+- fix mute control
+- fix LED on mute
+- app not sending midi
+- fix saving of the registers
+- fix issues with sequences length is 16
+- add about tab and attributions
+- fix warping issues making it loose phase
+- fix crash on unmute
+- move color change to clock handler
+- fix param size
+- param change making the app crash
+- apply correct pull for analog clock inputs
+- properly parse enum defaultValue
+- always pass through analog ticks
+- reduce number of sample readings for adc
+- increase codebook size for increased range
+- add midi throttling to 500 messages per second
+- disambiguate range names
+- enable calibration data migration
+- Change description
+- add favicon
+- add app params to manual
+- lil update procedure fix
+- fix routing for GitHub pages
+- quick manual styling fixes
+- fix app links to manual
+- show device version in settings tab
+- integrate manual into configurator
+- add app parameters and storage to manual
+- add troubleshooting link
+- fix MIDI CC number offset
+- fix bug preventing  going into free running mode
+- fix CC output not reaching 127
+- fix led feedback
+- use debounced save for storage
+- use proper bool default value
+- actually fix the bug causing CC not reaching 127
+- disable configurator version check
+- add proper semver version check
+- add package description for beta testing
+- ensure gh-pages deployment pushes to correct branch
+- change description for deployment testing
+- fix some typo
+- fix crash when pressing button 2 and moving fader 1
+- make LED color more consistent
+- clean up latch layer antipattern
+- never erase calibration range
+- add some variable safety
+- fix some copy to reflect save/recall setup
+- consider BASE_URL for icons
+- fix recall of setup params
+- properly redirect for firmware update
+- support zero-velocity note-offs
+- re-trigger gate on legato
+- support zero-velocity note-offs
+- remove filtering on MIDI CC
+- add hardware factory reset
+- add browser connection troubleshooting
+- auto-inject firmware version from release-please manifest
+- deploy configurator to versioned folders
+- make landing page look like before
+- try to autoconnect when coming from landing page
+- redirect all hash links to the correct version
+- support zero-velocity note-offs
+- re-trigger gate on legato
+- increase input gain in uni-polar mode
+- turn LED button off when muted
+- extend slew range, added passthrough a minimum
+- more typo corrections
+- cleanup scene recall
+- increase dynamic range, simplify nomenclature
+- prevent fader from freezing when clock is turned off in clocked mode
+- correct inverted mute LED logic in scene handler
+- remove filtering on MIDI CC
+- set correct new length
+- disable note off on stop when midi mode is not Note
+- enable linting in CI
+- fix range setting stuck on 0-10V
+- set default source/destinations
+- double usb MAX_PAYLOAD_SIZE to 512 bytes
+- configurator link (#403)
+- merge conflict artifact
+- remove unused navigate parameter from connect function
+- check faderpunk version on landing page (#440)
+- use react landing page (#443)
+- update url (#445)
+- fix hanging notes when pausing clock (#448)
+- add markdown parser for app entries (#451)
+- add public tick counter, reset delay (#449)
+- fix jitter issue (#468)
+- make tick counter start on 0 after reset (#479)
+- make analog ticks more resilient (#458)
+- repair i2c leader (#480)
+- improved fader jitter handling (#469)
+- use try_send for i2c messages
+- get the actual latest firmware version
+- make MidiCC default values more predictable (#490)
+- convert bipolar to range params (#494)
+- add NRPN param to app manuals (#496)
+- rename Bipolar param to Range (#501)
+- some QoL fixes (#504)
+- clippy issues
+- cache layout before loop to prevent GetLayout blocking forever (#509)
+- use CBOR to encode config and layout on FRAM (#513)
+- approve pnpm build scripts for pnpm 11 compatibility
+- bump default jitter tolerance from 20 to 25
+- [euclid] restore div_saved on boot, refresh mute LED on scene load (#523)
+- [control] decouple i2c from MIDI and fix NRPN change detection (#520)
+- increase EVENT_PUBSUB_SUBS to 80 to support 16 concurrent apps (#519)
+- prevent update-version-json from being skipped on faderpunk-only releases
+- fix MIDI CC guard so CC 127 is reachable in LFO, LFO+, rnd, rnd+ (#538)
+- don't auto-connect on device-less routes (#545)
+- recall setup in configurator (#547)
+- load params for duplicated apps so they appear in Active Apps (#558)
+- [genseq] linear pitch attenuation curve (#562)
+- CC 127 unreachable and NRPN gating resolution in LFO/RND apps (#563)
+- [tb3po] replace ms-based gate-off with PPQN tick countdown for exact 50% duty cycle (#569)
+- [euclid,fp_grids] remove stale tick_origin causing off-by-one on clock reset (#570)
+- [automator] correct ppqn values in Resolution param labels (#586)
+- [rnd,rnd_plus] restore last color on unmute and fix mute toggling (#585)
+- use different names for MIDI ports (#592)
+- re-arm external clock watchdog on Start/Continue (#594)
+- consolidate troubleshooting docs, drop stale WebUSB copy (#595)
+- auto-generate simulator app catalog from apps source (#597)
+- send MIDI CC/NRPN non-blocking to avoid stalling app control loops (#617)
+- skip USB writes when the host isn't attached (#619)
+- [genseq] silence stuck gate on clock stop / mute during legato tie (#621)
+- [tb3po] silence stuck gate on mute during slide (#622)
+- eliminate false fader events from ADC noise (#556)
+- eliminate false fader events from ADC noise (#556) (#628)
+- reject non-ASCII app names and descriptions (#601)
+- support current Rust toolchains (#632)
+- prioritize realtime output (#631)
+- align .text section start to 8 bytes (#614)
+- run boot animation at a fixed brightness (#645)
+- yield between SharedMax lock cycles to prevent gate jitter (#651)
+- never block the clock gatekeeper on a full pubsub (#636)
+- keep the metronome off the clock pubsub (#638)
+- drop unconsumed docs/apps manual-entry format from PR scope policy (#657)
+- coalesce controller updates
+- publish processed outputs over i2c
+- reuse GLOBAL_CHANNELS instead of a duplicate constant
+- turing mute ignores gate/MIDI outputs (#668)
+- recognize FPApp tooling in scope checks (#665)
+
 ## 1.12.0 (2026-09-01)
 
 ### Features
